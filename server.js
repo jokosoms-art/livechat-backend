@@ -126,7 +126,7 @@ app.get("/livechat/stream", (req, res) => {
 });
 
 /* -----------------------------------------------------
-   SSE: Admin Stream - IMPROVED CONNECTION HANDLING
+   SSE: Admin Stream - IMPROVED MESSAGE HANDLING
 ----------------------------------------------------- */
 app.get("/livechat/admin/stream", (req, res) => {
   console.log("Admin dashboard connecting to stream");
@@ -139,20 +139,34 @@ app.get("/livechat/admin/stream", (req, res) => {
     "Access-Control-Allow-Headers": "Cache-Control"
   });
 
-  // Send initial connection message with heartbeat
-  const sendHeartbeat = () => {
+  // Send initial connection message with current sessions
+  const sendInitialData = () => {
     try {
-      res.write(`data: ${JSON.stringify({ type: "heartbeat", timestamp: Date.now() })}\n\n`);
+      // Send current waiting sessions
+      const waitingSessions = Object.values(sessions).filter(s => !s.agentName);
+      res.write(`data: ${JSON.stringify({ 
+        type: "initial_data", 
+        waitingSessions: waitingSessions.length,
+        totalSessions: Object.keys(sessions).length
+      })}\n\n`);
     } catch (error) {
-      console.log('Heartbeat failed - connection closed');
+      console.log('Initial data send failed');
     }
   };
 
   // Send heartbeat every 30 seconds
-  const heartbeatInterval = setInterval(sendHeartbeat, 30000);
+  const heartbeatInterval = setInterval(() => {
+    try {
+      res.write(`data: ${JSON.stringify({ type: "heartbeat", timestamp: Date.now() })}\n\n`);
+    } catch (error) {
+      console.log('Heartbeat failed - connection closed');
+      clearInterval(heartbeatInterval);
+    }
+  }, 30000);
 
-  // Send connection confirmation
+  // Send connection confirmation and initial data
   res.write(`data: ${JSON.stringify({ type: "admin_connected", message: "SSE Connected" })}\n\n`);
+  setTimeout(sendInitialData, 100);
 
   adminClients.push(res);
 
@@ -173,7 +187,7 @@ app.get("/livechat/admin/stream", (req, res) => {
 });
 
 /* -----------------------------------------------------
-   User/Agent Sends a Message - IMPROVED NOTIFICATION
+   User/Agent Sends a Message - ENHANCED BROADCASTING
 ----------------------------------------------------- */
 app.post("/livechat/send", (req, res) => {
   const { sessionId, text, from } = req.body;
@@ -193,21 +207,57 @@ app.post("/livechat/send", (req, res) => {
 
   sessions[sessionId].messages.push(msg);
   
-  // Push to customer
+  // Push to customer (if customer sends, push to their stream)
   pushToClients(sessionId, msg);
 
-  // IMPROVED: Notify all admins with session context
-  if (from === "client") {
-    notifyAdmins({
-      type: "message",
-      sessionId,
-      from,
-      text,
-      userName: sessions[sessionId].userName,
-      requestedRole: sessions[sessionId].requestedRole,
-      timestamp: new Date().toISOString()
-    });
+  // ✅ FIX: Always notify admins about ALL messages with proper formatting
+  notifyAdmins({
+    type: "message",
+    sessionId,
+    from,
+    text,
+    userName: sessions[sessionId].userName,
+    requestedRole: sessions[sessionId].requestedRole,
+    agentName: sessions[sessionId].agentName,
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({ success: true });
+});/* -----------------------------------------------------
+   User/Agent Sends a Message - ENHANCED BROADCASTING
+----------------------------------------------------- */
+app.post("/livechat/send", (req, res) => {
+  const { sessionId, text, from } = req.body;
+
+  console.log(`Message from ${from} in session ${sessionId}: ${text}`);
+
+  if (!sessions[sessionId]) {
+    return res.status(404).json({ error: "Session not found" });
   }
+
+  const msg = {
+    from,
+    text,
+    time: Date.now(),
+    timestamp: new Date().toISOString()
+  };
+
+  sessions[sessionId].messages.push(msg);
+  
+  // Push to customer (if customer sends, push to their stream)
+  pushToClients(sessionId, msg);
+
+  // ✅ FIX: Always notify admins about ALL messages with proper formatting
+  notifyAdmins({
+    type: "message",
+    sessionId,
+    from,
+    text,
+    userName: sessions[sessionId].userName,
+    requestedRole: sessions[sessionId].requestedRole,
+    agentName: sessions[sessionId].agentName,
+    timestamp: new Date().toISOString()
+  });
 
   res.json({ success: true });
 });
@@ -366,6 +416,61 @@ app.get("/debug/admin", (req, res) => {
 });
 
 /* -----------------------------------------------------
+   Debug Endpoint - Check Specific Session
+----------------------------------------------------- */
+app.get("/debug/session/:sessionId", (req, res) => {
+  const sessionId = req.params.sessionId;
+  
+  if (!sessions[sessionId]) {
+    return res.status(404).json({ error: "Session not found" });
+  }
+
+  res.json({
+    session: sessions[sessionId],
+    hasClientStreams: !!clientStreams[sessionId],
+    clientStreamCount: clientStreams[sessionId] ? clientStreams[sessionId].length : 0,
+    adminClientCount: adminClients.length
+  });
+});
+
+/* -----------------------------------------------------
+   Debug Endpoint - Send Test Message
+----------------------------------------------------- */
+app.post("/debug/test-message", (req, res) => {
+  const { sessionId, text } = req.body;
+  
+  if (!sessions[sessionId]) {
+    return res.status(404).json({ error: "Session not found" });
+  }
+
+  // Simulate a user message
+  const msg = {
+    from: "client",
+    text: text || "Test message from debug",
+    time: Date.now(),
+    timestamp: new Date().toISOString()
+  };
+
+  sessions[sessionId].messages.push(msg);
+  
+  // Push to customer
+  pushToClients(sessionId, msg);
+
+  // Notify admins
+  notifyAdmins({
+    type: "message",
+    sessionId,
+    from: "client",
+    text: msg.text,
+    userName: sessions[sessionId].userName,
+    requestedRole: sessions[sessionId].requestedRole,
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({ success: true, message: "Test message sent" });
+});
+
+/* -----------------------------------------------------
    Start Server
 ----------------------------------------------------- */
 const PORT = process.env.PORT || 8080;
@@ -377,3 +482,4 @@ app.listen(PORT, () => {
   console.log(`Debug info: /debug/admin`);
   console.log("================================");
 });
+
