@@ -154,58 +154,53 @@ app.post("/livechat/request", (req, res) => {
 /* -----------------------------------------------------
    SSE: Client Stream (for chat widget) - IMPROVED
 ----------------------------------------------------- */
-app.get("/livechat/stream", (req, res) => {
-  const sessionId = req.query.sessionId;
-  console.log(`Client connecting to stream: ${sessionId}`);
-
-  if (!sessionId || !sessions[sessionId]) {
-    console.log(`Invalid session: ${sessionId}`);
-    return res.status(404).end();
-  }
-
-  // Enhanced headers for better compatibility
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache, no-transform",
-    "Connection": "keep-alive",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Cache-Control, Content-Type",
-    "X-Accel-Buffering": "no" // Important for proxies
-  });
-
-  // Send initial connection message
-  res.write(`data: ${JSON.stringify({ type: "connected", sessionId })}\n\n`);
-
-  // Add heartbeat for client connection
-  const heartbeatInterval = setInterval(() => {
-    try {
-      res.write(`data: ${JSON.stringify({ type: "heartbeat", timestamp: Date.now() })}\n\n`);
-    } catch (error) {
-      clearInterval(heartbeatInterval);
+app.get('/livechat/stream', (req, res) => {
+    const sessionId = req.query.sessionId;
+    
+    if (!sessionId) {
+        return res.status(400).json({ error: 'Session ID required' });
     }
-  }, 25000);
 
-  if (!clientStreams[sessionId]) clientStreams[sessionId] = [];
-  clientStreams[sessionId].push(res);
+    console.log(`🔗 Client connected to SSE: ${sessionId}`);
 
-  req.on("close", () => {
-    console.log(`Client disconnected from session: ${sessionId}`);
-    clearInterval(heartbeatInterval);
-    if (clientStreams[sessionId]) {
-      clientStreams[sessionId] = clientStreams[sessionId].filter((r) => r !== res);
-      if (clientStreams[sessionId].length === 0) {
-        delete clientStreams[sessionId];
-      }
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Cache-Control'
+    });
+
+    // Send connection confirmation
+    res.write(`data: ${JSON.stringify({ type: 'connected', sessionId })}\n\n`);
+
+    // Store the client connection
+    if (!clientConnections[sessionId]) {
+        clientConnections[sessionId] = [];
     }
-  });
+    clientConnections[sessionId].push(res);
 
-  req.on("error", (err) => {
-    console.log(`Client stream error for session ${sessionId}:`, err);
-    clearInterval(heartbeatInterval);
-    if (clientStreams[sessionId]) {
-      clientStreams[sessionId] = clientStreams[sessionId].filter((r) => r !== res);
-    }
-  });
+    // Send heartbeat every 30 seconds
+    const heartbeat = setInterval(() => {
+        if (res.writableEnded) {
+            clearInterval(heartbeat);
+            return;
+        }
+        res.write(`data: ${JSON.stringify({ type: 'heartbeat', timestamp: Date.now() })}\n\n`);
+    }, 30000);
+
+    // Clean up on close
+    req.on('close', () => {
+        console.log(`🔌 Client SSE connection closed: ${sessionId}`);
+        clearInterval(heartbeat);
+        
+        if (clientConnections[sessionId]) {
+            clientConnections[sessionId] = clientConnections[sessionId].filter(conn => conn !== res);
+            if (clientConnections[sessionId].length === 0) {
+                delete clientConnections[sessionId];
+            }
+        }
+    });
 });
 
 /* -----------------------------------------------------
@@ -293,35 +288,88 @@ app.get("/livechat/admin/stream", (req, res) => {
 /* -----------------------------------------------------
    User/Agent Sends a Message - ENHANCED BROADCASTING
 ----------------------------------------------------- */
-app.post("/livechat/send", (req, res) => {
-  const { sessionId, text, from } = req.body;
+app.post('/livechat/send', async (req, res) => {
+    try {
+        const { sessionId, text, from } = req.body;
+        
+        if (!sessionId || !text) {
+            return res.status(400).json({ error: 'Session ID and text are required' });
+        }
 
-  if (!sessions[sessionId]) {
-    return res.status(404).json({ error: "Session not found" });
-  }
+        console.log(`📨 Message from ${from} in session ${sessionId}: ${text}`);
 
-  const msg = {
-    from: from,
-    text: text,
-    time: Date.now()
-  };
+        // Store message in session
+        if (!sessions[sessionId]) {
+            sessions[sessionId] = { messages: [], createdAt: Date.now() };
+        }
+        
+        const message = {
+            from: from || 'user',
+            text: text,
+            timestamp: new Date().toISOString(),
+            name: req.body.name || 'Guest'
+        };
+        
+        sessions[sessionId].messages.push(message);
+        sessions[sessionId].lastActivity = Date.now();
 
-  sessions[sessionId].messages.push(msg);
-  sessions[sessionId].lastActivity = new Date();
-  
-  // Push to customer
-  pushToClients(sessionId, msg);
+        // Broadcast to admin (if admin is connected)
+        if (adminConnections[sessionId]) {
+            adminConnections[sessionId].forEach(adminRes => {
+                if (!adminRes.writableEnded) {
+                    adminRes.write(`data: ${JSON.stringify(message)}\n\n`);
+                }
+            });
+        }
 
-  // ✅ FIX: Always notify admins about messages
-  notifyAdmins({
-    type: "message",
-    sessionId: sessionId,
-    from: from,
-    text: text,
-    userName: sessions[sessionId].userName
-  });
+        res.json({ success: true, message: 'Message sent' });
 
-  res.json({ success: true });
+    } catch (error) {
+        console.error('❌ Error sending message:', error);
+        res.status(500).json({ error: 'Failed to send message' });
+    }
+});
+
+app.post('/livechat/send', async (req, res) => {
+    try {
+        const { sessionId, text, from } = req.body;
+        
+        if (!sessionId || !text) {
+            return res.status(400).json({ error: 'Session ID and text are required' });
+        }
+
+        console.log(`📨 Message from ${from} in session ${sessionId}: ${text}`);
+
+        // Store message in session
+        if (!sessions[sessionId]) {
+            sessions[sessionId] = { messages: [], createdAt: Date.now() };
+        }
+        
+        const message = {
+            from: from || 'user',
+            text: text,
+            timestamp: new Date().toISOString(),
+            name: req.body.name || 'Guest'
+        };
+        
+        sessions[sessionId].messages.push(message);
+        sessions[sessionId].lastActivity = Date.now();
+
+        // Broadcast to admin (if admin is connected)
+        if (adminConnections[sessionId]) {
+            adminConnections[sessionId].forEach(adminRes => {
+                if (!adminRes.writableEnded) {
+                    adminRes.write(`data: ${JSON.stringify(message)}\n\n`);
+                }
+            });
+        }
+
+        res.json({ success: true, message: 'Message sent' });
+
+    } catch (error) {
+        console.error('❌ Error sending message:', error);
+        res.status(500).json({ error: 'Failed to send message' });
+    }
 });
 
 /* -----------------------------------------------------
@@ -700,5 +748,6 @@ app.listen(PORT, () => {
   console.log(`⏰ Session timeout: ${SESSION_TIMEOUT / 60000} minutes`);
   console.log("=================================");
 });
+
 
 
