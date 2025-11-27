@@ -293,7 +293,7 @@ app.get("/livechat/admin/stream", (req, res) => {
 });
 
 /* -----------------------------------------------------
-   User/Agent Sends a Message - FIXED ECHO PROBLEM
+   User/Agent Sends a Message - FIXED NO ECHO VERSION
 ----------------------------------------------------- */
 app.post('/livechat/send', async (req, res) => {
     try {
@@ -305,72 +305,57 @@ app.post('/livechat/send', async (req, res) => {
 
         console.log(`📨 Message from ${from} in session ${sessionId}: ${text}`);
 
-        // Store message in session
+        // Ensure session exists
         if (!sessions[sessionId]) {
-            sessions[sessionId] = { 
-                messages: [], 
-                createdAt: Date.now(),
-                userName: name || 'Guest'
-            };
+            return res.status(404).json({ error: 'Session not found' });
         }
         
         const message = {
             from: from || 'user',
             text: text,
             timestamp: new Date().toISOString(),
-            name: name || 'Guest'
+            name: name || (from === 'agent' ? 'Agent' : 'Guest')
         };
         
+        // Store message in session
         sessions[sessionId].messages.push(message);
         sessions[sessionId].lastActivity = Date.now();
 
-        // 🚨 CRITICAL FIX: Proper message routing without echo
+        // 🚨 CLEAR ROUTING - NO ECHO:
         if (from === 'user') {
-            // Message from client → Send to ALL admins ONLY
-            console.log(`📤 Routing user message to ${adminClients.length} admin clients`);
+            // Message from CLIENT → Send to ALL ADMINS only
+            console.log(`📤 User message → Notifying ${adminClients.length} admins`);
             
-            adminClients.forEach((adminRes, index) => {
-                try {
-                    if (!adminRes.writableEnded && adminRes.writable) {
-                        const adminMessage = {
-                            type: "message",
-                            sessionId: sessionId,
-                            from: 'user',
-                            text: text,
-                            name: name || 'Guest',
-                            userName: sessions[sessionId].userName,
-                            timestamp: new Date().toISOString()
-                        };
-                        
-                        adminRes.write(`data: ${JSON.stringify(adminMessage)}\n\n`);
-                        console.log(`✅ User message sent to admin ${index}`);
-                    }
-                } catch (error) {
-                    console.log(`❌ Failed to send to admin ${index}:`, error.message);
-                }
+            notifyAdmins({
+                type: "message",
+                sessionId: sessionId,
+                from: 'user',
+                text: text,
+                userName: sessions[sessionId].userName,
+                timestamp: new Date().toISOString()
             });
             
-        } else if (from === 'agent' || from === 'admin') {
-            // 🚨 Message from admin → Send to CLIENT ONLY (NOT back to admin)
-            console.log(`📤 Routing admin message to CLIENT ONLY for session ${sessionId}`);
+        } else if (from === 'agent') {
+            // Message from ADMIN → Send to CLIENT only (NOT back to admin)
+            console.log(`📤 Admin message → Sending to client session ${sessionId}`);
             
-            // Send ONLY to client connections, NOT to admin connections
+            // Send ONLY to client
             if (clientConnections[sessionId]) {
-                clientConnections[sessionId].forEach(clientRes => {
+                clientConnections[sessionId].forEach((clientRes, index) => {
                     try {
                         if (!clientRes.writableEnded && clientRes.writable) {
                             clientRes.write(`data: ${JSON.stringify(message)}\n\n`);
-                            console.log(`✅ Admin message sent to client for session ${sessionId}`);
+                            console.log(`✅ Admin message delivered to client ${index}`);
                         }
                     } catch (error) {
-                        console.log(`❌ Failed to send to client:`, error.message);
+                        console.log(`❌ Failed to send to client ${index}:`, error.message);
                     }
                 });
             } else {
                 console.log(`❌ No client connections for session ${sessionId}`);
             }
             
-            // 🚨 DO NOT send admin messages back to admin connections
+            // 🚨 CRITICAL: DO NOT call notifyAdmins() for admin messages
             // This prevents the echo effect
         }
 
@@ -874,6 +859,7 @@ app.listen(PORT, () => {
   console.log(`⏰ Session timeout: ${SESSION_TIMEOUT / 60000} minutes`);
   console.log("=================================");
 });
+
 
 
 
