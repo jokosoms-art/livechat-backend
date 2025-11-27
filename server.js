@@ -59,33 +59,26 @@ function pushToClients(sessionId, message) {
 }
 
 function notifyAdmins(payload) {
-    console.log(`📢 Notifying ${adminClients.length} admins:`, payload);
-    
-    let activeConnections = 0;
-    let deadConnections = 0;
-    
-    // Clean up dead connections and send notifications
-    for (let i = adminClients.length - 1; i >= 0; i--) {
-        const res = adminClients[i];
-        try {
-            // Test if connection is still writable
-            const message = `data: ${JSON.stringify(payload)}\n\n`;
-            res.write(message);
-            console.log(`✅ Sent to admin ${i}:`, payload.type);
-            activeConnections++;
-        } catch (error) {
-            console.log('❌ Removing dead admin connection:', error.message);
-            adminClients.splice(i, 1);
-            deadConnections++;
-        }
+  console.log(`🔔 Notifying ${adminClients.length} admins:`, payload.type);
+  
+  // Clean up dead connections first
+  for (let i = adminClients.length - 1; i >= 0; i--) {
+    const res = adminClients[i];
+    if (res.writableEnded || res.destroyed) {
+      adminClients.splice(i, 1);
+      console.log('Removed dead admin connection');
     }
-    
-    console.log(`📊 Admin notification result: ${activeConnections} active, ${deadConnections} dead`);
-    
-    // If no active connections, log a warning
-    if (activeConnections === 0) {
-        console.warn('⚠️ No active admin connections to receive notifications');
+  }
+  
+  // Send to all active admin clients
+  adminClients.forEach((res, index) => {
+    try {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      console.log(`✅ Sent to admin ${index}`);
+    } catch (error) {
+      console.log('Failed to send to admin:', error.message);
     }
+  });
 }
 
 /* -----------------------------------------------------
@@ -128,48 +121,34 @@ setInterval(cleanupExpiredSessions, 5 * 60 * 1000);
    Create Session - IMPROVED NOTIFICATION
 ----------------------------------------------------- */
 app.post("/livechat/request", (req, res) => {
-    const { name = "Guest", requestedRole = "support", initialMessages = [] } = req.body;
-    const sessionId = uuid();
+  const { name = "Guest", requestedRole = "support", initialMessages = [] } = req.body;
+  const sessionId = uuid();
 
-    // ✅ CRITICAL FIX: Ensure name is never null/undefined
-    const safeName = name || "Guest";
+  // ✅ FIX: Ensure name is never null
+  const safeName = name && name !== "null" ? name : "Guest";
 
-    // Validate and normalize the role
-    const validRoles = ["sales", "consultant", "support", "account"];
-    const normalizedRole = validRoles.includes(requestedRole.toLowerCase()) 
-        ? requestedRole.toLowerCase() 
-        : "support";
+  sessions[sessionId] = {
+    id: sessionId,
+    userName: safeName,
+    requestedRole: requestedRole.toLowerCase(),
+    agentName: null,
+    messages: [...initialMessages],
+    createdAt: new Date(),
+    lastActivity: new Date()
+  };
 
-    sessions[sessionId] = {
-        id: sessionId,
-        userName: safeName, // ✅ Use safeName instead of name
-        requestedRole: normalizedRole,
-        agentName: null,
-        assignedRole: null,
-        messages: [...initialMessages],
-        createdAt: new Date(),
-        timestamp: new Date().toISOString(),
-        lastActivity: new Date()
-    };
+  console.log(`🆕 New session: ${sessionId} for ${safeName}`);
 
-    console.log(`🆕 New session created: ${sessionId}`, {
-        user: safeName,
-        role: normalizedRole,
-        messages: initialMessages.length
-    });
+  // ✅ FIX: Simple, reliable notification
+  notifyAdmins({
+    type: "new_session",
+    sessionId: sessionId,
+    userName: safeName,
+    requestedRole: requestedRole.toLowerCase(),
+    timestamp: new Date().toISOString()
+  });
 
-    // ✅ IMPROVED: Send notification with guaranteed data
-    notifyAdmins({
-        type: "new_session",
-        sessionId,
-        userName: safeName, // ✅ Use safeName
-        requestedRole: normalizedRole,
-        timestamp: new Date().toISOString(),
-        messagesCount: initialMessages.length,
-        id: sessionId
-    });
-
-    res.json({ sessionId });
+  res.json({ sessionId });
 });
 
 /* -----------------------------------------------------
@@ -317,37 +296,29 @@ app.get("/livechat/admin/stream", (req, res) => {
 app.post("/livechat/send", (req, res) => {
   const { sessionId, text, from } = req.body;
 
-  console.log(`Message from ${from} in session ${sessionId}: ${text}`);
-
   if (!sessions[sessionId]) {
     return res.status(404).json({ error: "Session not found" });
   }
 
-  // Update last activity
-  sessions[sessionId].lastActivity = new Date();
-
   const msg = {
-    from,
-    text: text.substring(0, 1000), // Limit message length
-    time: Date.now(),
-    timestamp: new Date().toISOString()
+    from: from,
+    text: text,
+    time: Date.now()
   };
 
   sessions[sessionId].messages.push(msg);
+  sessions[sessionId].lastActivity = new Date();
   
   // Push to customer
   pushToClients(sessionId, msg);
 
-  // ✅ FIX: Always notify admins about ALL messages with proper formatting
+  // ✅ FIX: Always notify admins about messages
   notifyAdmins({
     type: "message",
-    sessionId,
-    from,
-    text: msg.text,
-    userName: sessions[sessionId].userName,
-    requestedRole: sessions[sessionId].requestedRole,
-    agentName: sessions[sessionId].agentName,
-    timestamp: new Date().toISOString()
+    sessionId: sessionId,
+    from: from,
+    text: text,
+    userName: sessions[sessionId].userName
   });
 
   res.json({ success: true });
@@ -729,4 +700,5 @@ app.listen(PORT, () => {
   console.log(`⏰ Session timeout: ${SESSION_TIMEOUT / 60000} minutes`);
   console.log("=================================");
 });
+
 
