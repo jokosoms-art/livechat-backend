@@ -31,23 +31,23 @@ app.options("/livechat/stream", (req, res) => {
 });
 
 /* -----------------------------------------------------
-   In-Memory Store
+   In-Memory Store - FIXED VARIABLE NAMES
 ----------------------------------------------------- */
 const sessions = {}; 
 const adminClients = []; 
-const clientStreams = {}; 
+const clientConnections = {}; // 🚨 FIXED: Consistent naming
 
 // Session timeout configuration
 const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
 /* -----------------------------------------------------
-   SSE Helpers - IMPROVED
+   SSE Helpers - FIXED
 ----------------------------------------------------- */
 function pushToClients(sessionId, message) {
-  if (!clientStreams[sessionId]) return;
+  if (!clientConnections[sessionId]) return;
   
   // Clean up dead connections
-  clientStreams[sessionId] = clientStreams[sessionId].filter(res => {
+  clientConnections[sessionId] = clientConnections[sessionId].filter(res => {
     try {
       res.write(`data: ${JSON.stringify(message)}\n\n`);
       return true;
@@ -104,7 +104,7 @@ function cleanupExpiredSessions() {
       
       // Clean up
       delete sessions[sessionId];
-      delete clientStreams[sessionId];
+      delete clientConnections[sessionId];
       expiredCount++;
     }
   });
@@ -152,7 +152,7 @@ app.post("/livechat/request", (req, res) => {
 });
 
 /* -----------------------------------------------------
-   SSE: Client Stream (for chat widget) - IMPROVED
+   SSE: Client Stream (for chat widget) - FIXED
 ----------------------------------------------------- */
 app.get('/livechat/stream', (req, res) => {
     const sessionId = req.query.sessionId;
@@ -286,11 +286,11 @@ app.get("/livechat/admin/stream", (req, res) => {
 });
 
 /* -----------------------------------------------------
-   User/Agent Sends a Message - ENHANCED BROADCASTING
+   User/Agent Sends a Message - 🚨 CRITICAL FIX
 ----------------------------------------------------- */
 app.post('/livechat/send', async (req, res) => {
     try {
-        const { sessionId, text, from } = req.body;
+        const { sessionId, text, from, name } = req.body;
         
         if (!sessionId || !text) {
             return res.status(400).json({ error: 'Session ID and text are required' });
@@ -307,19 +307,29 @@ app.post('/livechat/send', async (req, res) => {
             from: from || 'user',
             text: text,
             timestamp: new Date().toISOString(),
-            name: req.body.name || 'Guest'
+            name: name || 'Guest'
         };
         
         sessions[sessionId].messages.push(message);
         sessions[sessionId].lastActivity = Date.now();
 
-        // Broadcast to admin (if admin is connected)
-        if (adminConnections[sessionId]) {
-            adminConnections[sessionId].forEach(adminRes => {
-                if (!adminRes.writableEnded) {
-                    adminRes.write(`data: ${JSON.stringify(message)}\n\n`);
-                }
+        // 🚨 CRITICAL FIX: Proper message routing
+        if (from === 'user') {
+            // Message from client → Send ONLY to admins
+            console.log(`📤 Routing user message to admins for session ${sessionId}`);
+            notifyAdmins({
+                type: "message",
+                sessionId,
+                from: 'user',
+                text: text,
+                name: name || 'Guest',
+                timestamp: new Date().toISOString()
             });
+            
+        } else if (from === 'agent' || from === 'admin') {
+            // Message from admin → Send ONLY to client
+            console.log(`📤 Routing admin message to client for session ${sessionId}`);
+            pushToClients(sessionId, message);
         }
 
         res.json({ success: true, message: 'Message sent' });
@@ -330,44 +340,42 @@ app.post('/livechat/send', async (req, res) => {
     }
 });
 
-app.post('/livechat/send', async (req, res) => {
+// 🚨 REMOVED: Delete the duplicate /livechat/send route
+
+/* -----------------------------------------------------
+   Admin Sends Message to Client - NEW ENDPOINT
+----------------------------------------------------- */
+app.post('/livechat/admin-send', async (req, res) => {
     try {
-        const { sessionId, text, from } = req.body;
+        const { sessionId, text, agentName } = req.body;
         
         if (!sessionId || !text) {
             return res.status(400).json({ error: 'Session ID and text are required' });
         }
 
-        console.log(`📨 Message from ${from} in session ${sessionId}: ${text}`);
+        console.log(`👨‍💼 Admin message for session ${sessionId}: ${text}`);
 
-        // Store message in session
         if (!sessions[sessionId]) {
-            sessions[sessionId] = { messages: [], createdAt: Date.now() };
+            return res.status(404).json({ error: 'Session not found' });
         }
         
         const message = {
-            from: from || 'user',
+            from: 'agent',
             text: text,
             timestamp: new Date().toISOString(),
-            name: req.body.name || 'Guest'
+            name: agentName || 'Agent'
         };
         
         sessions[sessionId].messages.push(message);
         sessions[sessionId].lastActivity = Date.now();
 
-        // Broadcast to admin (if admin is connected)
-        if (adminConnections[sessionId]) {
-            adminConnections[sessionId].forEach(adminRes => {
-                if (!adminRes.writableEnded) {
-                    adminRes.write(`data: ${JSON.stringify(message)}\n\n`);
-                }
-            });
-        }
+        // Send to client only
+        pushToClients(sessionId, message);
 
-        res.json({ success: true, message: 'Message sent' });
+        res.json({ success: true, message: 'Message sent to client' });
 
     } catch (error) {
-        console.error('❌ Error sending message:', error);
+        console.error('❌ Error sending admin message:', error);
         res.status(500).json({ error: 'Failed to send message' });
     }
 });
@@ -490,7 +498,7 @@ app.post("/livechat/close", (req, res) => {
 
   // Clean up
   delete sessions[sessionId];
-  delete clientStreams[sessionId];
+  delete clientConnections[sessionId];
 
   res.json({ success: true });
 });
@@ -541,7 +549,7 @@ app.get("/livechat/test-connection", (req, res) => {
     serverTime: new Date().toISOString(),
     sessions: Object.keys(sessions).length,
     adminConnections: adminClients.length,
-    activeClientStreams: Object.keys(clientStreams).length,
+    activeClientStreams: Object.keys(clientConnections).length,
     environment: process.env.NODE_ENV || 'development',
     message: "Live Chat Server is running correctly"
   });
@@ -558,7 +566,7 @@ app.get("/health", (req, res) => {
     totalSessions: Object.keys(sessions).length,
     waitingSessions: waitingSessions.length,
     adminClients: adminClients.length,
-    activeClientStreams: Object.keys(clientStreams).length,
+    activeClientStreams: Object.keys(clientConnections).length,
     uptime: process.uptime(),
     timestamp: new Date().toISOString()
   });
@@ -617,8 +625,8 @@ app.get("/debug/session/:sessionId", (req, res) => {
 
   res.json({
     session: sessions[sessionId],
-    hasClientStreams: !!clientStreams[sessionId],
-    clientStreamCount: clientStreams[sessionId] ? clientStreams[sessionId].length : 0,
+    hasClientStreams: !!clientConnections[sessionId],
+    clientStreamCount: clientConnections[sessionId] ? clientConnections[sessionId].length : 0,
     adminClientCount: adminClients.length
   });
 });
@@ -748,6 +756,3 @@ app.listen(PORT, () => {
   console.log(`⏰ Session timeout: ${SESSION_TIMEOUT / 60000} minutes`);
   console.log("=================================");
 });
-
-
-
