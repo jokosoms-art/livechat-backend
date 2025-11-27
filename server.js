@@ -295,6 +295,9 @@ app.get("/livechat/admin/stream", (req, res) => {
 /* -----------------------------------------------------
    User/Agent Sends a Message - 🚨 FIXED ROUTING
 ----------------------------------------------------- */
+/* -----------------------------------------------------
+   User/Agent Sends a Message - 🚨 WORKING VERSION
+----------------------------------------------------- */
 app.post('/livechat/send', async (req, res) => {
     try {
         const { sessionId, text, from, name } = req.body;
@@ -324,27 +327,36 @@ app.post('/livechat/send', async (req, res) => {
         sessions[sessionId].messages.push(message);
         sessions[sessionId].lastActivity = Date.now();
 
-        // 🚨 CRITICAL FIX: Proper message routing
+        // 🚨 CRITICAL: Send user messages to ALL admin clients
         if (from === 'user') {
-            // Message from client → Send to ALL admins via notifyAdmins
-            console.log(`📤 Routing user message to ALL admins for session ${sessionId}`);
+            console.log(`📤 Sending user message to ${adminClients.length} admin clients`);
             
-            notifyAdmins({
-                type: "message",
-                sessionId: sessionId,
-                from: 'user',
-                text: text,
-                name: name || 'Guest',
-                userName: sessions[sessionId].userName,
-                timestamp: new Date().toISOString(),
-                message: text // Some admin panels expect this field
+            // Send to ALL admin connections (notifyAdmins function)
+            adminClients.forEach((adminRes, index) => {
+                try {
+                    if (!adminRes.writableEnded && adminRes.writable) {
+                        const adminMessage = {
+                            type: "message",
+                            sessionId: sessionId,
+                            from: 'user',
+                            text: text,
+                            name: name || 'Guest',
+                            userName: sessions[sessionId].userName,
+                            timestamp: new Date().toISOString(),
+                            message: text // Some admin panels expect this field
+                        };
+                        
+                        adminRes.write(`data: ${JSON.stringify(adminMessage)}\n\n`);
+                        console.log(`✅ Sent to admin client ${index}`);
+                    }
+                } catch (error) {
+                    console.log(`❌ Failed to send to admin ${index}:`, error.message);
+                }
             });
-            
-            console.log(`✅ User message sent to ${adminClients.length} admin clients`);
             
         } else if (from === 'agent' || from === 'admin') {
             // Message from admin → Send to client
-            console.log(`📤 Routing admin message to client for session ${sessionId}`);
+            console.log(`📤 Routing admin message to client`);
             pushToClients(sessionId, message);
         }
 
@@ -356,6 +368,51 @@ app.post('/livechat/send', async (req, res) => {
     }
 });
 
+
+/* -----------------------------------------------------
+   Simple Test - Send Direct Message to Admin
+----------------------------------------------------- */
+app.post("/test-message-to-admin", (req, res) => {
+    const { sessionId, text = "Test message" } = req.body;
+    
+    console.log("🔧 TEST: Sending direct message to admins");
+    
+    if (!sessionId) {
+        return res.status(400).json({ error: "Session ID required" });
+    }
+    
+    // Send directly to ALL admin clients
+    let sentCount = 0;
+    adminClients.forEach((adminRes, index) => {
+        try {
+            if (!adminRes.writableEnded && adminRes.writable) {
+                const testMessage = {
+                    type: "message",
+                    sessionId: sessionId,
+                    from: "user", 
+                    text: text,
+                    name: "Test User",
+                    timestamp: new Date().toISOString(),
+                    message: text,
+                    test: true
+                };
+                
+                adminRes.write(`data: ${JSON.stringify(testMessage)}\n\n`);
+                sentCount++;
+                console.log(`✅ TEST sent to admin ${index}`);
+            }
+        } catch (error) {
+            console.log(`❌ TEST failed for admin ${index}:`, error.message);
+        }
+    });
+    
+    res.json({ 
+        success: true, 
+        message: `Test message sent to ${sentCount} admins`,
+        adminConnections: adminClients.length,
+        sentTo: sentCount
+    });
+});
 /* -----------------------------------------------------
    Admin Sends Message to Client - NEW ENDPOINT
 ----------------------------------------------------- */
@@ -804,4 +861,5 @@ app.listen(PORT, () => {
   console.log(`⏰ Session timeout: ${SESSION_TIMEOUT / 60000} minutes`);
   console.log("=================================");
 });
+
 
