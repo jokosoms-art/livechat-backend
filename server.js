@@ -293,10 +293,7 @@ app.get("/livechat/admin/stream", (req, res) => {
 });
 
 /* -----------------------------------------------------
-   User/Agent Sends a Message - 🚨 FIXED ROUTING
------------------------------------------------------ */
-/* -----------------------------------------------------
-   User/Agent Sends a Message - 🚨 WORKING VERSION
+   User/Agent Sends a Message - FIXED ECHO PROBLEM
 ----------------------------------------------------- */
 app.post('/livechat/send', async (req, res) => {
     try {
@@ -327,11 +324,11 @@ app.post('/livechat/send', async (req, res) => {
         sessions[sessionId].messages.push(message);
         sessions[sessionId].lastActivity = Date.now();
 
-        // 🚨 CRITICAL: Send user messages to ALL admin clients
+        // 🚨 CRITICAL FIX: Proper message routing without echo
         if (from === 'user') {
-            console.log(`📤 Sending user message to ${adminClients.length} admin clients`);
+            // Message from client → Send to ALL admins ONLY
+            console.log(`📤 Routing user message to ${adminClients.length} admin clients`);
             
-            // Send to ALL admin connections (notifyAdmins function)
             adminClients.forEach((adminRes, index) => {
                 try {
                     if (!adminRes.writableEnded && adminRes.writable) {
@@ -342,12 +339,11 @@ app.post('/livechat/send', async (req, res) => {
                             text: text,
                             name: name || 'Guest',
                             userName: sessions[sessionId].userName,
-                            timestamp: new Date().toISOString(),
-                            message: text // Some admin panels expect this field
+                            timestamp: new Date().toISOString()
                         };
                         
                         adminRes.write(`data: ${JSON.stringify(adminMessage)}\n\n`);
-                        console.log(`✅ Sent to admin client ${index}`);
+                        console.log(`✅ User message sent to admin ${index}`);
                     }
                 } catch (error) {
                     console.log(`❌ Failed to send to admin ${index}:`, error.message);
@@ -355,9 +351,27 @@ app.post('/livechat/send', async (req, res) => {
             });
             
         } else if (from === 'agent' || from === 'admin') {
-            // Message from admin → Send to client
-            console.log(`📤 Routing admin message to client`);
-            pushToClients(sessionId, message);
+            // 🚨 Message from admin → Send to CLIENT ONLY (NOT back to admin)
+            console.log(`📤 Routing admin message to CLIENT ONLY for session ${sessionId}`);
+            
+            // Send ONLY to client connections, NOT to admin connections
+            if (clientConnections[sessionId]) {
+                clientConnections[sessionId].forEach(clientRes => {
+                    try {
+                        if (!clientRes.writableEnded && clientRes.writable) {
+                            clientRes.write(`data: ${JSON.stringify(message)}\n\n`);
+                            console.log(`✅ Admin message sent to client for session ${sessionId}`);
+                        }
+                    } catch (error) {
+                        console.log(`❌ Failed to send to client:`, error.message);
+                    }
+                });
+            } else {
+                console.log(`❌ No client connections for session ${sessionId}`);
+            }
+            
+            // 🚨 DO NOT send admin messages back to admin connections
+            // This prevents the echo effect
         }
 
         res.json({ success: true, message: 'Message sent' });
@@ -367,7 +381,6 @@ app.post('/livechat/send', async (req, res) => {
         res.status(500).json({ error: 'Failed to send message' });
     }
 });
-
 
 /* -----------------------------------------------------
    Simple Test - Send Direct Message to Admin
@@ -861,5 +874,6 @@ app.listen(PORT, () => {
   console.log(`⏰ Session timeout: ${SESSION_TIMEOUT / 60000} minutes`);
   console.log("=================================");
 });
+
 
 
