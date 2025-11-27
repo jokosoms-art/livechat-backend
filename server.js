@@ -4,8 +4,31 @@ const cors = require("cors");
 const { v4: uuid } = require("uuid");
 
 const app = express();
-app.use(cors());
+
+// Enhanced CORS configuration
+app.use(cors({
+    origin: "*", // Allow all origins for now
+    credentials: false,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Cache-Control', 'Accept']
+}));
+
 app.use(express.json());
+
+// Add specific OPTIONS handling for SSE endpoints
+app.options("/livechat/admin/stream", (req, res) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Cache-Control, Accept");
+    res.status(200).end();
+});
+
+app.options("/livechat/stream", (req, res) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Cache-Control, Accept");
+    res.status(200).end();
+});
 
 /* -----------------------------------------------------
    In-Memory Store
@@ -13,6 +36,9 @@ app.use(express.json());
 const sessions = {}; 
 const adminClients = []; 
 const clientStreams = {}; 
+
+// Session timeout configuration
+const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
 /* -----------------------------------------------------
    SSE Helpers - IMPROVED
@@ -52,6 +78,42 @@ function notifyAdmins(payload) {
 }
 
 /* -----------------------------------------------------
+   Session Cleanup - AUTO REMOVE EXPIRED SESSIONS
+----------------------------------------------------- */
+function cleanupExpiredSessions() {
+  const now = Date.now();
+  let expiredCount = 0;
+  
+  Object.keys(sessions).forEach(sessionId => {
+    const session = sessions[sessionId];
+    const sessionAge = now - new Date(session.createdAt).getTime();
+    
+    if (sessionAge > SESSION_TIMEOUT) {
+      console.log(`Cleaning up expired session: ${sessionId}`);
+      
+      // Notify admins
+      notifyAdmins({
+        type: "session_expired",
+        sessionId,
+        userName: session.userName
+      });
+      
+      // Clean up
+      delete sessions[sessionId];
+      delete clientStreams[sessionId];
+      expiredCount++;
+    }
+  });
+  
+  if (expiredCount > 0) {
+    console.log(`Cleaned up ${expiredCount} expired sessions`);
+  }
+}
+
+// Run cleanup every 5 minutes
+setInterval(cleanupExpiredSessions, 5 * 60 * 1000);
+
+/* -----------------------------------------------------
    Create Session - IMPROVED NOTIFICATION
 ----------------------------------------------------- */
 app.post("/livechat/request", (req, res) => {
@@ -72,7 +134,8 @@ app.post("/livechat/request", (req, res) => {
     assignedRole: null,
     messages: [...initialMessages],
     createdAt: new Date(),
-    timestamp: new Date().toISOString() // Add for admin panel
+    timestamp: new Date().toISOString(),
+    lastActivity: new Date()
   };
 
   console.log(`New session created: ${sessionId} for role: ${normalizedRole} - User: ${name}`);
@@ -86,14 +149,14 @@ app.post("/livechat/request", (req, res) => {
     requestedRole: normalizedRole,
     timestamp: new Date().toISOString(),
     messagesCount: initialMessages.length,
-    id: sessionId // Add id for admin panel compatibility
+    id: sessionId
   });
 
   res.json({ sessionId });
 });
 
 /* -----------------------------------------------------
-   SSE: Client Stream (for chat widget)
+   SSE: Client Stream (for chat widget) - IMPROVED
 ----------------------------------------------------- */
 app.get("/livechat/stream", (req, res) => {
   const sessionId = req.query.sessionId;
@@ -104,21 +167,45 @@ app.get("/livechat/stream", (req, res) => {
     return res.status(404).end();
   }
 
+  // Enhanced headers for better compatibility
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
     "Access-Control-Allow-Origin": "*",
-    Connection: "keep-alive"
+    "Access-Control-Allow-Headers": "Cache-Control, Content-Type",
+    "X-Accel-Buffering": "no" // Important for proxies
   });
 
   // Send initial connection message
   res.write(`data: ${JSON.stringify({ type: "connected", sessionId })}\n\n`);
+
+  // Add heartbeat for client connection
+  const heartbeatInterval = setInterval(() => {
+    try {
+      res.write(`data: ${JSON.stringify({ type: "heartbeat", timestamp: Date.now() })}\n\n`);
+    } catch (error) {
+      clearInterval(heartbeatInterval);
+    }
+  }, 25000);
 
   if (!clientStreams[sessionId]) clientStreams[sessionId] = [];
   clientStreams[sessionId].push(res);
 
   req.on("close", () => {
     console.log(`Client disconnected from session: ${sessionId}`);
+    clearInterval(heartbeatInterval);
+    if (clientStreams[sessionId]) {
+      clientStreams[sessionId] = clientStreams[sessionId].filter((r) => r !== res);
+      if (clientStreams[sessionId].length === 0) {
+        delete clientStreams[sessionId];
+      }
+    }
+  });
+
+  req.on("error", (err) => {
+    console.log(`Client stream error for session ${sessionId}:`, err);
+    clearInterval(heartbeatInterval);
     if (clientStreams[sessionId]) {
       clientStreams[sessionId] = clientStreams[sessionId].filter((r) => r !== res);
     }
@@ -126,60 +213,81 @@ app.get("/livechat/stream", (req, res) => {
 });
 
 /* -----------------------------------------------------
-   SSE: Admin Stream - IMPROVED MESSAGE HANDLING
+   SSE: Admin Stream - ENHANCED CONNECTION HANDLING
 ----------------------------------------------------- */
 app.get("/livechat/admin/stream", (req, res) => {
-  console.log("Admin dashboard connecting to stream");
+  console.log("🖥️ Admin dashboard connecting to SSE stream");
 
+  // Enhanced headers for better compatibility
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache", 
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
     "Access-Control-Allow-Origin": "*",
-    Connection: "keep-alive",
-    "Access-Control-Allow-Headers": "Cache-Control"
+    "Access-Control-Allow-Headers": "Cache-Control, Content-Type, Accept",
+    "Access-Control-Expose-Headers": "Content-Type, Cache-Control",
+    "X-Accel-Buffering": "no" // Important for some proxies
   });
 
-  // Send initial connection message with current sessions
+  const clientId = Math.random().toString(36).substring(7);
+  console.log(`Admin client connected: ${clientId}`);
+
+  // Send immediate connection confirmation
+  res.write(`data: ${JSON.stringify({ 
+    type: "admin_connected", 
+    message: "SSE Connected Successfully",
+    clientId,
+    timestamp: new Date().toISOString()
+  })}\n\n`);
+
+  // Send current session data
   const sendInitialData = () => {
     try {
-      // Send current waiting sessions
       const waitingSessions = Object.values(sessions).filter(s => !s.agentName);
       res.write(`data: ${JSON.stringify({ 
         type: "initial_data", 
         waitingSessions: waitingSessions.length,
-        totalSessions: Object.keys(sessions).length
+        totalSessions: Object.keys(sessions).length,
+        clientId
       })}\n\n`);
     } catch (error) {
       console.log('Initial data send failed');
     }
   };
 
-  // Send heartbeat every 30 seconds
+  // Enhanced heartbeat with error handling
   const heartbeatInterval = setInterval(() => {
     try {
-      res.write(`data: ${JSON.stringify({ type: "heartbeat", timestamp: Date.now() })}\n\n`);
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ 
+          type: "heartbeat", 
+          clientId,
+          timestamp: Date.now() 
+        })}\n\n`);
+      }
     } catch (error) {
-      console.log('Heartbeat failed - connection closed');
+      console.log(`💔 Heartbeat failed for client ${clientId}`);
       clearInterval(heartbeatInterval);
     }
-  }, 30000);
+  }, 25000); // 25 seconds
 
-  // Send connection confirmation and initial data
-  res.write(`data: ${JSON.stringify({ type: "admin_connected", message: "SSE Connected" })}\n\n`);
+  // Send initial data after a short delay
   setTimeout(sendInitialData, 100);
 
   adminClients.push(res);
 
   req.on("close", () => {
-    console.log("Admin dashboard disconnected");
+    console.log(`📴 Admin client disconnected: ${clientId}`);
     clearInterval(heartbeatInterval);
     const index = adminClients.indexOf(res);
-    if (index !== -1) adminClients.splice(index, 1);
-    console.log(`Remaining admin connections: ${adminClients.length}`);
+    if (index !== -1) {
+      adminClients.splice(index, 1);
+      console.log(`Remaining admin connections: ${adminClients.length}`);
+    }
   });
 
   req.on("error", (err) => {
-    console.log("Admin stream error:", err);
+    console.log(`❌ Admin stream error for ${clientId}:`, err.message);
     clearInterval(heartbeatInterval);
     const index = adminClients.indexOf(res);
     if (index !== -1) adminClients.splice(index, 1);
@@ -198,16 +306,19 @@ app.post("/livechat/send", (req, res) => {
     return res.status(404).json({ error: "Session not found" });
   }
 
+  // Update last activity
+  sessions[sessionId].lastActivity = new Date();
+
   const msg = {
     from,
-    text,
+    text: text.substring(0, 1000), // Limit message length
     time: Date.now(),
     timestamp: new Date().toISOString()
   };
 
   sessions[sessionId].messages.push(msg);
   
-  // Push to customer (if customer sends, push to their stream)
+  // Push to customer
   pushToClients(sessionId, msg);
 
   // ✅ FIX: Always notify admins about ALL messages with proper formatting
@@ -215,44 +326,7 @@ app.post("/livechat/send", (req, res) => {
     type: "message",
     sessionId,
     from,
-    text,
-    userName: sessions[sessionId].userName,
-    requestedRole: sessions[sessionId].requestedRole,
-    agentName: sessions[sessionId].agentName,
-    timestamp: new Date().toISOString()
-  });
-
-  res.json({ success: true });
-});/* -----------------------------------------------------
-   User/Agent Sends a Message - ENHANCED BROADCASTING
------------------------------------------------------ */
-app.post("/livechat/send", (req, res) => {
-  const { sessionId, text, from } = req.body;
-
-  console.log(`Message from ${from} in session ${sessionId}: ${text}`);
-
-  if (!sessions[sessionId]) {
-    return res.status(404).json({ error: "Session not found" });
-  }
-
-  const msg = {
-    from,
-    text,
-    time: Date.now(),
-    timestamp: new Date().toISOString()
-  };
-
-  sessions[sessionId].messages.push(msg);
-  
-  // Push to customer (if customer sends, push to their stream)
-  pushToClients(sessionId, msg);
-
-  // ✅ FIX: Always notify admins about ALL messages with proper formatting
-  notifyAdmins({
-    type: "message",
-    sessionId,
-    from,
-    text,
+    text: msg.text,
     userName: sessions[sessionId].userName,
     requestedRole: sessions[sessionId].requestedRole,
     agentName: sessions[sessionId].agentName,
@@ -276,6 +350,7 @@ app.post("/livechat/claim", (req, res) => {
 
   sessions[sessionId].agentName = agentName;
   sessions[sessionId].assignedRole = agentRole.toLowerCase();
+  sessions[sessionId].lastActivity = new Date();
 
   // IMPROVED: Notify all admins about assignment with more details
   notifyAdmins({
@@ -326,7 +401,8 @@ app.get("/livechat/sessions", (req, res) => {
     messagesCount: s.messages.length,
     lastMessage: s.messages[s.messages.length - 1] || null,
     createdAt: s.createdAt,
-    timestamp: s.timestamp || s.createdAt // Ensure timestamp exists
+    lastActivity: s.lastActivity,
+    timestamp: s.timestamp || s.createdAt
   }));
 
   console.log(`Returning ${list.length} sessions for role: ${role || 'all'}`);
@@ -384,6 +460,58 @@ app.post("/livechat/close", (req, res) => {
 });
 
 /* -----------------------------------------------------
+   Session Transfer Between Roles
+----------------------------------------------------- */
+app.post("/livechat/transfer", (req, res) => {
+  const { sessionId, targetRole, transferredBy } = req.body;
+
+  if (!sessions[sessionId]) {
+    return res.status(404).json({ error: "Session not found" });
+  }
+
+  const validRoles = ["sales", "consultant", "support", "account"];
+  if (!validRoles.includes(targetRole.toLowerCase())) {
+    return res.status(400).json({ error: "Invalid target role" });
+  }
+
+  const oldRole = sessions[sessionId].requestedRole;
+  sessions[sessionId].requestedRole = targetRole.toLowerCase();
+  sessions[sessionId].agentName = null; // Unassign current agent
+  sessions[sessionId].lastActivity = new Date();
+
+  // Notify admins about transfer
+  notifyAdmins({
+    type: "session_transferred",
+    sessionId,
+    userName: sessions[sessionId].userName,
+    fromRole: oldRole,
+    toRole: targetRole,
+    transferredBy,
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({ 
+    success: true, 
+    message: `Session transferred from ${oldRole} to ${targetRole}` 
+  });
+});
+
+/* -----------------------------------------------------
+   Connection Test Endpoint
+----------------------------------------------------- */
+app.get("/livechat/test-connection", (req, res) => {
+  res.json({
+    status: "ok",
+    serverTime: new Date().toISOString(),
+    sessions: Object.keys(sessions).length,
+    adminConnections: adminClients.length,
+    activeClientStreams: Object.keys(clientStreams).length,
+    environment: process.env.NODE_ENV || 'development',
+    message: "Live Chat Server is running correctly"
+  });
+});
+
+/* -----------------------------------------------------
    Health Check with Admin Info
 ----------------------------------------------------- */
 app.get("/health", (req, res) => {
@@ -394,8 +522,33 @@ app.get("/health", (req, res) => {
     totalSessions: Object.keys(sessions).length,
     waitingSessions: waitingSessions.length,
     adminClients: adminClients.length,
-    activeClientStreams: Object.keys(clientStreams).length
+    activeClientStreams: Object.keys(clientStreams).length,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
   });
+});
+
+/* -----------------------------------------------------
+   Get Session Statistics
+----------------------------------------------------- */
+app.get("/livechat/stats", (req, res) => {
+  const sessionArray = Object.values(sessions);
+  
+  const stats = {
+    total: sessionArray.length,
+    byRole: {
+      sales: sessionArray.filter(s => s.requestedRole === 'sales').length,
+      consultant: sessionArray.filter(s => s.requestedRole === 'consultant').length,
+      support: sessionArray.filter(s => s.requestedRole === 'support').length,
+      account: sessionArray.filter(s => s.requestedRole === 'account').length
+    },
+    waiting: sessionArray.filter(s => !s.agentName).length,
+    active: sessionArray.filter(s => s.agentName).length,
+    adminConnections: adminClients.length,
+    timestamp: new Date().toISOString()
+  };
+
+  res.json(stats);
 });
 
 /* -----------------------------------------------------
@@ -410,7 +563,8 @@ app.get("/debug/admin", (req, res) => {
       userName: s.userName,
       requestedRole: s.requestedRole,
       agentName: s.agentName,
-      messagesCount: s.messages.length
+      messagesCount: s.messages.length,
+      lastActivity: s.lastActivity
     }))
   });
 });
@@ -437,21 +591,22 @@ app.get("/debug/session/:sessionId", (req, res) => {
    Debug Endpoint - Send Test Message
 ----------------------------------------------------- */
 app.post("/debug/test-message", (req, res) => {
-  const { sessionId, text } = req.body;
+  const { sessionId, text, from = "client" } = req.body;
   
   if (!sessions[sessionId]) {
     return res.status(404).json({ error: "Session not found" });
   }
 
-  // Simulate a user message
+  // Simulate a message
   const msg = {
-    from: "client",
-    text: text || "Test message from debug",
+    from,
+    text: text || "Test message from debug endpoint",
     time: Date.now(),
     timestamp: new Date().toISOString()
   };
 
   sessions[sessionId].messages.push(msg);
+  sessions[sessionId].lastActivity = new Date();
   
   // Push to customer
   pushToClients(sessionId, msg);
@@ -460,7 +615,7 @@ app.post("/debug/test-message", (req, res) => {
   notifyAdmins({
     type: "message",
     sessionId,
-    from: "client",
+    from,
     text: msg.text,
     userName: sessions[sessionId].userName,
     requestedRole: sessions[sessionId].requestedRole,
@@ -471,15 +626,35 @@ app.post("/debug/test-message", (req, res) => {
 });
 
 /* -----------------------------------------------------
+   Root endpoint
+----------------------------------------------------- */
+app.get("/", (req, res) => {
+  res.json({
+    message: "Live Chat Backend Server",
+    endpoints: {
+      health: "/health",
+      testConnection: "/livechat/test-connection",
+      adminSSE: "/livechat/admin/stream",
+      clientSSE: "/livechat/stream?sessionId=YOUR_SESSION_ID",
+      stats: "/livechat/stats",
+      debug: "/debug/admin"
+    },
+    version: "1.0.0"
+  });
+});
+
+/* -----------------------------------------------------
    Start Server
 ----------------------------------------------------- */
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log("=== Live Chat Backend Server ===");
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Admin SSE: /livechat/admin/stream`);
-  console.log(`Health check: /health`);
-  console.log(`Debug info: /debug/admin`);
-  console.log("================================");
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`📊 Health check: /health`);
+  console.log(`🖥️ Admin SSE: /livechat/admin/stream`);
+  console.log(`📱 Client SSE: /livechat/stream`);
+  console.log(`🔧 Debug info: /debug/admin`);
+  console.log(`⏰ Session timeout: ${SESSION_TIMEOUT / 60000} minutes`);
+  console.log("=================================");
 });
-
