@@ -1,5 +1,5 @@
 const express = require("express");
-const mysql = require("mysql");
+const mysql = require("mysql2");
 const OpenAI = require("openai");
 const cors = require("cors");
 const { v4: uuid } = require("uuid");
@@ -2892,6 +2892,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
