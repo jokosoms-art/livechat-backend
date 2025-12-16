@@ -752,6 +752,9 @@ app.post("/ai/chat", async (req, res) => {
 
 // Helper: Build enhanced prompt
 function buildEnhancedPrompt(promptData, similarConversations, context) {
+    // Ambil agent_type dari promptData atau default ke "general"
+    const agentType = promptData.agent_type || "general";
+    
     let prompt = `
 IDENTITY: ${promptData.identity || 'AI Assistant'}
 ROLE: ${promptData.role_description || ''}
@@ -800,49 +803,10 @@ ${conv.user_satisfaction ? `User Feedback: ${conv.user_satisfaction}` : ''}
         prompt += `\n\nESCALATION TRIGGERS:\n${promptData.escalation_triggers}`;
     }
     
-    return buildSystemPromptForN8N(promptData, context);
+    // KOREKSI: Tambahkan parameter agentType (ke-3)
+    return buildSystemPromptForN8N(promptData, context, agentType);
 }
 
-    // Helper: Build OpenAI messages
-    // function buildOpenAIMessages(systemPrompt, userMessage, history, context) {
-    //     const messages = [
-    //         { role: "system", content: systemPrompt }
-    //     ];
-
-    // Add context as user message
-    // if (Object.keys(context).length > 0) {
-    //     messages.push({
-    //         role: "user",
-    //         content: `Additional context: ${JSON.stringify(context, null, 2)}`
-    //     });
-    // }
-
-    // Add history
-    // history.forEach(msg => {
-    //     messages.push({
-    //         role: msg.role === 'user' ? 'user' : 'assistant',
-    //         content: msg.content
-    //     });
-    // });
-
-    // Add current message
-    //     messages.push({ role: "user", content: userMessage });
-    
-    //     return messages;
-    // }
-
-app.get("/n8n/test", (req, res) => {
-    res.json({
-        status: "online",
-        message: "Server is running on port 3000",
-        timestamp: new Date().toISOString(),
-        endpoints: {
-            getPrompt: "POST /n8n/get-prompt",
-            aiChat: "POST /ai/chat",
-            liveChat: "Various endpoints"
-        }
-    });
-});
 
 // Test endpoint untuk prompt database
 app.get("/n8n/test-prompt/:agent_type", async (req, res) => {
@@ -1140,69 +1104,6 @@ app.post("/n8n/get-prompt", async (req, res) => {
   }
 });
 
-// Helper function to build system prompt
-function buildSystemPromptForN8N(prompt, context, agentType) {
-  const roleRules = {
-    sales: `
-- You MAY discuss pricing, plans, and subscriptions
-- You MAY guide users toward purchase decisions
-- Focus on product features and benefits
-- Provide clear pricing information when asked`,
-    
-    support: `
-- Focus on troubleshooting and issue resolution
-- DO NOT discuss pricing or sales topics
-- Provide technical assistance and solutions
-- Escalate billing issues to sales team`,
-    
-    automation: `
-- Explain workflows, integrations, and automations
-- Focus on technical implementation steps
-- DO NOT discuss pricing or sales topics
-- Provide guidance on setup and configuration`,
-    
-    general: `
-- Provide high-level product information
-- DO NOT discuss pricing or technical details
-- Route specific inquiries to appropriate teams
-- Maintain general assistance role`
-  };
-
-  const userInfo = context.user_name ? `User: ${context.user_name}` : "";
-  const productInfo = context.product ? `Product: ${context.product}` : "";
-  
-  return `
-# IDENTITY
-${prompt.identity || `You are a ${agentType} AI assistant for iHub products.`}
-
-# RESPONSIBILITIES
-${prompt.role_description || `Assist users with ${agentType} related inquiries.`}
-
-# KNOWLEDGE BASE
-${prompt.context_knowledge || "General information about iHub products and services."}
-
-# CONTEXT
-${userInfo}
-${productInfo}
-${context.chat_history_length ? `Chat History Length: ${context.chat_history_length}` : ""}
-
-# ROLE-SPECIFIC RULES
-${roleRules[agentType] || roleRules.general}
-
-# COMMUNICATION STYLE
-Language: ${prompt.language || "australian_english"}
-Tone: ${prompt.tone || "professional"}
-
-# HARD CONSTRAINTS
-1. You MUST act strictly as a ${agentType} agent
-2. You are NOT allowed to switch roles
-3. If a request is outside your role, politely redirect
-4. Always maintain professional and helpful tone
-
-# FINAL INSTRUCTION
-Answer the user's question clearly, accurately, and according to your role constraints.
-`.trim();
-}
 
 
 app.get("/ai/prompts", (req, res) => {
@@ -1341,50 +1242,68 @@ app.get("/ai/dashboard", (req, res) => {
 });
 
 // Bangun system prompt untuk N8N/Ollama
-function buildSystemPromptForN8N(promptData, context) {
-    let prompt = `# IDENTITY & ROLE
-You are: ${promptData.identity}
-Role: ${promptData.role_description}
+// FUNGSI YANG BENAR (tunggal):
+function buildSystemPromptForN8N(promptData, context, agentType) {
+  const roleRules = {
+    sales: `
+- You MAY discuss pricing, plans, and subscriptions
+- You MAY guide users toward purchase decisions
+- Focus on product features and benefits
+- Provide clear pricing information when asked`,
+    
+    support: `
+- Focus on troubleshooting and issue resolution
+- DO NOT discuss pricing or sales topics
+- Provide technical assistance and solutions
+- Escalate billing issues to sales team`,
+    
+    automation: `
+- Explain workflows, integrations, and automations
+- Focus on technical implementation steps
+- DO NOT discuss pricing or sales topics
+- Provide guidance on setup and configuration`,
+    
+    general: `
+- Provide high-level product information
+- DO NOT discuss pricing or technical details
+- Route specific inquiries to appropriate teams
+- Maintain general assistance role`
+  };
+
+  const userInfo = context.user_name ? `User: ${context.user_name}` : "";
+  const productInfo = context.product ? `Product: ${context.product}` : "";
+  
+  return `
+# IDENTITY
+${promptData.identity || `You are a ${agentType} AI assistant for iHub products.`}
+
+# RESPONSIBILITIES
+${promptData.role_description || `Assist users with ${agentType} related inquiries.`}
 
 # KNOWLEDGE BASE
-${promptData.context_knowledge}
+${promptData.context_knowledge || "General information about iHub products and services."}
+
+# CONTEXT
+${userInfo}
+${productInfo}
+${context.chat_history_length ? `Chat History Length: ${context.chat_history_length}` : ""}
+
+# ROLE-SPECIFIC RULES
+${roleRules[agentType] || roleRules.general}
 
 # COMMUNICATION STYLE
-- Language: ${promptData.language}
-- Tone: ${promptData.tone}
-- Response Format: ${promptData.response_format || 'clear and concise'}
+Language: ${promptData.language || "australian_english"}
+Tone: ${promptData.tone || "professional"}
 
-# PRIMARY GOALS
-${promptData.primary_goals}
+# HARD CONSTRAINTS
+1. You MUST act strictly as a ${agentType} agent
+2. You are NOT allowed to switch roles
+3. If a request is outside your role, politely redirect
+4. Always maintain professional and helpful tone
 
-# DO'S (MUST FOLLOW)
-${promptData.do_guidelines}
-
-# DON'TS (AVOID)
-${promptData.dont_guidelines}`;
-
-    // Tambahkan routing rules jika ada
-    if (promptData.routing_rules) {
-        prompt += `\n\n# ROUTING RULES\n${promptData.routing_rules}`;
-    }
-    
-    // Tambahkan escalation triggers jika ada
-    if (promptData.escalation_triggers) {
-        prompt += `\n\n# ESCALATION TRIGGERS\n${promptData.escalation_triggers}`;
-    }
-    
-    // Tambahkan context
-    if (Object.keys(context).length > 0) {
-        prompt += `\n\n# CURRENT USER CONTEXT\n${JSON.stringify(context, null, 2)}`;
-    }
-    
-    prompt += `\n\n# INSTRUCTIONS
-Respond according to your identity, role, and guidelines above.
-Be helpful, professional, and follow all rules strictly.
-If unsure, ask clarifying questions.
-Always end with a question or suggestion for next steps.`;
-    
-    return prompt;
+# FINAL INSTRUCTION
+Answer the user's question clearly, accurately, and according to your role constraints.
+`.trim();
 }
 
 // Endpoint untuk N8N mengirim chat dengan database prompt
@@ -3030,6 +2949,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
