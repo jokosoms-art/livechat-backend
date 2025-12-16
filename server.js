@@ -10,9 +10,7 @@ const app = express();
 app.use((req, res, next) => {
     const allowedOrigins = [
         'https://livechat-backend-rj7y.onrender.com',
-        'http://localhost:5678',
-        'http://127.0.0.1:5678',
-        'http://127.0.0.1:8000',
+        'https://n8n.ihubtechnologies.com.au',
         'https://ihubs-chat.infinityfreeapp.com'
     ];
     
@@ -580,8 +578,7 @@ app.post("/ai/chat", async (req, res) => {
         // CALL N8N
         // ===============================
         const n8nResponse = await fetch(
-            // "http://localhost:5678/webhook/wastevantage-chatbot",
-            "http://localhost:5678/webhook/ihubs_chat",
+            "https://n8n.ihubtechnologies.com.au/webhook/ihubs_chat",
             {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -1471,7 +1468,7 @@ async function findSimilarConversations(currentMessage, agent_type, limit = 5) {
 
 
 async function callN8NWebhook(data, endpoint = "ihubs_chat") {
-    const n8nUrl = `http://localhost:5678/webhook/${endpoint}`;
+    const n8nUrl = `https://n8n.ihubtechnologies.com.au/webhook/${endpoint}`;
     
     console.log(`🔗 Calling N8N: ${n8nUrl}`);
     console.log(`   Request data:`, JSON.stringify(data, null, 2));
@@ -1689,8 +1686,7 @@ function updateConfidenceScore(conversation_id, direction) {
 // Fallback ke N8N
 async function handleWithN8N(req, res) {
     try {
-        // const n8nResponse = await fetch("http://localhost:5678/webhook/wastevantage-chatbot", {
-        const n8nResponse = await fetch("http://localhost:5678/webhook/ihubs_chat", {
+        const n8nResponse = await fetch("https://n8n.ihubtechnologies.com.au/webhook/ihubs_chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(req.body)
@@ -2807,7 +2803,7 @@ app.get("/debug/chat-state", (req, res) => {
         },
         instructions: {
             step1: 'Check browser console for debug logs',
-            step2: 'Test directly: curl -X POST http://localhost:3000/n8n/get-prompt -H "Content-Type: application/json" -d \'{"agent_type": "sales"}\'',
+            step2: 'Test directly: curl -X POST https://livechat-backend-rj7y.onrender.com/n8n/get-prompt -H "Content-Type: application/json" -d \'{"agent_type": "sales"}\'',
             step3: 'Check n8n workflow execution logs'
         }
     });
@@ -2896,4 +2892,5 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
