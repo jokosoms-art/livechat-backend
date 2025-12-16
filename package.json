@@ -6,7 +6,8 @@
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "uuid": "^9.0.0"
+    "uuid": "^9.0.0",
+    "mysql2": "^3.9.1"  // ← ADD THIS LINE
   },
   "scripts": {
     "start": "node server.js"
@@ -15,3 +16,4 @@
     "node": "18.x"
   }
 }
+
