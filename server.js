@@ -6,57 +6,14 @@ const { v4: uuid } = require("uuid");
 
 const app = express();
 
-// Enhanced CORS configuration
-app.use(cors({
-    origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) return callback(null, true);
-        
-        const allowedOrigins = [
-            "http://localhost:3000",
-            "http://localhost:5678", 
-            "http://127.0.0.1:5678",
-            "http://127.0.0.1:8000",
-            "http://localhost:8000"
-        ];
-        
-        if (allowedOrigins.includes(origin)) {
-            return callback(null, true);
-        } else {
-            console.log('CORS blocked for origin:', origin);
-            return callback(new Error('Not allowed by CORS'));
-        }
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE', 'PATCH'],
-    allowedHeaders: [
-        'Content-Type', 
-        'Authorization', 
-        'Cache-Control', 
-        'Accept', 
-        'X-Requested-With',
-        'X-Debug',
-        'X-Source',
-        'Origin',
-        'Access-Control-Request-Method',
-        'Access-Control-Request-Headers'
-    ],
-    exposedHeaders: [
-        'Content-Length',
-        'Content-Type',
-        'X-Response-Time'
-    ],
-    maxAge: 86400
-}));
-
 // Manual CORS headers for extra safety
 app.use((req, res, next) => {
     const allowedOrigins = [
-        'http://localhost:3000',
+        'https://livechat-backend-rj7y.onrender.com',
         'http://localhost:5678',
         'http://127.0.0.1:5678',
         'http://127.0.0.1:8000',
-        'http://localhost:8000'
+        'https://ihubs-chat.infinityfreeapp.com'
     ];
     
     const origin = req.headers.origin;
@@ -100,10 +57,10 @@ app.use(express.json());
 // MYSQL CONNECTION
 // -----------------------------------------------------
 const db = mysql.createConnection({
-    host: "localhost",
+    host: "demo-ovhv1.ihubtechnologies.com.au",
     user: "root",
-    password: "",
-    database: "ihub_crm",
+    password: "hb]D228Jf#Fy",
+    database: "ihub_database    ",
     port: 3306
 });
 
@@ -2939,3 +2896,4 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
