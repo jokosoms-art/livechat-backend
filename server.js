@@ -58,7 +58,7 @@ const db = mysql.createConnection({
     host: "demo-ovhv1.ihubtechnologies.com.au",
     user: "root",
     password: "hb]D228Jf#Fy",
-    database: "ihub_database    ",
+    database: "ihub_database",
     port: 3306
 });
 
@@ -2892,5 +2892,6 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
