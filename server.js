@@ -1803,16 +1803,48 @@ function getDefaultGreeting() {
     };
 }
 
-async function safeQuery(sql, params = []) {
-    try {
-        return await dbQuery(sql, params);
-    } catch (err) {
-        if (err.code === 'ECONNRESET' || err.code === 'PROTOCOL_CONNECTION_LOST') {
-            console.warn("DB reconnect retry...");
-            return await dbQuery(sql, params);
-        }
-        throw err;
+async function safeQuery(
+  sql,
+  params = [],
+  {
+    retries = 2,
+    delayMs = 200
+  } = {}
+) {
+  try {
+    return await dbQuery(sql, params);
+  } catch (err) {
+    const retryableErrors = [
+      "ECONNRESET",
+      "PROTOCOL_CONNECTION_LOST",
+      "ETIMEDOUT",
+      "EPIPE"
+    ];
+
+    const shouldRetry =
+      retryableErrors.includes(err.code) && retries > 0;
+
+    if (!shouldRetry) {
+      console.error("❌ DB Query Failed:", {
+        code: err.code,
+        message: err.message,
+        sql
+      });
+      throw err;
     }
+
+    console.warn(
+      `⚠️ DB error (${err.code}). Retrying in ${delayMs}ms... (${retries} left)`
+    );
+
+    // Delay (simple backoff)
+    await new Promise(res => setTimeout(res, delayMs));
+
+    return safeQuery(sql, params, {
+      retries: retries - 1,
+      delayMs: delayMs * 2 // exponential backoff
+    });
+  }
 }
 
 // -----------------------------------------------------
@@ -2901,6 +2933,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
