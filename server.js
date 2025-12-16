@@ -1018,27 +1018,43 @@ app.get("/ai/analytics/:agent_type", (req, res) => {
     });
 });
 
-const sanitizeAgentType = (v) =>
-  typeof v === "string"
-    ? v.replace(/^=+/, "").trim().toLowerCase()
-    : "general";
-// Endpoint untuk N8N mengambil prompt dari database
 app.post("/n8n/get-prompt", async (req, res) => {
-  console.log("🔧 N8N Request: Get prompt for", req.body.agent_type);
+  console.log("🔧 N8N Request: Get prompt for agent_type:", req.body.agent_type);
+  console.log("📦 Full request body:", JSON.stringify(req.body, null, 2));
 
   try {
     const rawAgentType = req.body.agent_type;
-    const agent_type = sanitizeAgentType(rawAgentType);
     const context = req.body.context || {};
-
-    console.log("🧹 Sanitized agent_type:", rawAgentType, "→", agent_type);
-
-    if (!agent_type) {
-      return res.json({
-        success: false,
-        error: "agent_type is required"
-      });
+    const message = req.body.message || "";
+    
+    // VALIDATION: Use request agent_type, DO NOT sanitize/change it
+    let agentTypeForQuery = "general"; // default
+    
+    if (rawAgentType && typeof rawAgentType === "string") {
+      const cleanType = rawAgentType.toLowerCase().trim();
+      
+      // Allow only valid agent types, but keep original if valid
+      const allowedTypes = ["sales", "support", "automation", "general"];
+      
+      if (allowedTypes.includes(cleanType)) {
+        agentTypeForQuery = cleanType;
+      } else {
+        // If invalid, try to infer from message
+        console.log("⚠️ Invalid agent_type, inferring from message:", cleanType);
+        if (message.toLowerCase().includes("price") || message.toLowerCase().includes("plan")) {
+          agentTypeForQuery = "sales";
+        } else if (message.toLowerCase().includes("support") || message.toLowerCase().includes("issue")) {
+          agentTypeForQuery = "support";
+        } else if (message.toLowerCase().includes("integration") || message.toLowerCase().includes("automation")) {
+          agentTypeForQuery = "automation";
+        } else {
+          agentTypeForQuery = "general";
+        }
+      }
     }
+    
+    console.log(`📡 Query Database with agent_type: "${agentTypeForQuery}"`);
+    console.log(`📤 Response will use agent_type: "${rawAgentType || agentTypeForQuery}"`);
 
     const query = `
       SELECT * FROM chatbot_prompts
@@ -1048,29 +1064,49 @@ app.post("/n8n/get-prompt", async (req, res) => {
       LIMIT 1
     `;
 
-    console.log(`📊 SQL Query param: ${agent_type}`);
-
-    db.query(query, [agent_type], (error, results) => {
+    db.query(query, [agentTypeForQuery], (error, results) => {
       if (error) {
         console.error("❌ Database error:", error);
         return res.json({
           success: false,
-          error: "Database query failed"
+          error: "Database query failed",
+          timestamp: new Date().toISOString()
         });
       }
 
+      // RESPONSE AGENT_TYPE: Always use the ORIGINAL request value
+      const responseAgentType = rawAgentType || agentTypeForQuery;
+      
       if (results.length === 0) {
-        console.log(`❌ No prompt found for ${agent_type}, using fallback`);
+        console.log(`❌ No prompt found for "${agentTypeForQuery}", using fallback`);
+        
+        // Build fallback prompt
+        const fallbackPrompt = `You are a ${responseAgentType} AI assistant for iHub products.
+
+# RESPONSIBILITIES
+- Answer questions related to ${responseAgentType} inquiries
+- Provide accurate information about iHub products
+- Maintain professional and helpful communication
+
+# STYLE
+Language: australian_english
+Tone: professional
+
+# IMPORTANT
+You MUST act strictly as a ${responseAgentType} agent.
+If a request is outside your role, politely redirect the user.`;
 
         return res.json({
           success: true,
           prompt: {
-            system_prompt: `You are a ${agent_type} assistant for iHub products.`,
-            identity: `${agent_type} Assistant`,
-            agent_type: agent_type,
+            system_prompt: fallbackPrompt,
+            identity: `${responseAgentType.charAt(0).toUpperCase() + responseAgentType.slice(1)} Assistant`,
+            agent_type: responseAgentType, // RETURN ORIGINAL REQUEST TYPE
             language: "australian_english",
             tone: "professional",
-            version: "fallback_1.0"
+            version: "fallback_1.0",
+            context_knowledge: "",
+            role_description: `Assist with ${responseAgentType} related inquiries`
           },
           is_fallback: true,
           timestamp: new Date().toISOString()
@@ -1078,20 +1114,23 @@ app.post("/n8n/get-prompt", async (req, res) => {
       }
 
       const prompt = results[0];
-
-      const systemPrompt = buildSystemPromptForN8N(prompt, context);
+      console.log(`✅ Found prompt for "${agentTypeForQuery}":`, prompt.identity);
+      
+      // Build dynamic system prompt
+      const systemPrompt = buildSystemPromptForN8N(prompt, context, responseAgentType);
 
       res.json({
         success: true,
         prompt: {
           system_prompt: systemPrompt,
           identity: prompt.identity,
-          agent_type: prompt.agent_type,
-          language: prompt.language,
-          tone: prompt.tone,
-          version: prompt.version,
-          context_knowledge: prompt.context_knowledge,
-          status: prompt.status
+          agent_type: responseAgentType, // CRITICAL: Use REQUEST type, not DB type
+          language: prompt.language || "australian_english",
+          tone: prompt.tone || "professional",
+          version: prompt.version || "v1.0",
+          context_knowledge: prompt.context_knowledge || "",
+          role_description: prompt.role_description || "",
+          status: prompt.status || "active"
         },
         is_fallback: false,
         timestamp: new Date().toISOString()
@@ -1102,10 +1141,75 @@ app.post("/n8n/get-prompt", async (req, res) => {
     console.error("❌ N8N get-prompt error:", error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      timestamp: new Date().toISOString()
     });
   }
 });
+
+// Helper function to build system prompt
+function buildSystemPromptForN8N(prompt, context, agentType) {
+  const roleRules = {
+    sales: `
+- You MAY discuss pricing, plans, and subscriptions
+- You MAY guide users toward purchase decisions
+- Focus on product features and benefits
+- Provide clear pricing information when asked`,
+    
+    support: `
+- Focus on troubleshooting and issue resolution
+- DO NOT discuss pricing or sales topics
+- Provide technical assistance and solutions
+- Escalate billing issues to sales team`,
+    
+    automation: `
+- Explain workflows, integrations, and automations
+- Focus on technical implementation steps
+- DO NOT discuss pricing or sales topics
+- Provide guidance on setup and configuration`,
+    
+    general: `
+- Provide high-level product information
+- DO NOT discuss pricing or technical details
+- Route specific inquiries to appropriate teams
+- Maintain general assistance role`
+  };
+
+  const userInfo = context.user_name ? `User: ${context.user_name}` : "";
+  const productInfo = context.product ? `Product: ${context.product}` : "";
+  
+  return `
+# IDENTITY
+${prompt.identity || `You are a ${agentType} AI assistant for iHub products.`}
+
+# RESPONSIBILITIES
+${prompt.role_description || `Assist users with ${agentType} related inquiries.`}
+
+# KNOWLEDGE BASE
+${prompt.context_knowledge || "General information about iHub products and services."}
+
+# CONTEXT
+${userInfo}
+${productInfo}
+${context.chat_history_length ? `Chat History Length: ${context.chat_history_length}` : ""}
+
+# ROLE-SPECIFIC RULES
+${roleRules[agentType] || roleRules.general}
+
+# COMMUNICATION STYLE
+Language: ${prompt.language || "australian_english"}
+Tone: ${prompt.tone || "professional"}
+
+# HARD CONSTRAINTS
+1. You MUST act strictly as a ${agentType} agent
+2. You are NOT allowed to switch roles
+3. If a request is outside your role, politely redirect
+4. Always maintain professional and helpful tone
+
+# FINAL INSTRUCTION
+Answer the user's question clearly, accurately, and according to your role constraints.
+`.trim();
+}
 
 
 app.get("/ai/prompts", (req, res) => {
@@ -2933,6 +3037,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
