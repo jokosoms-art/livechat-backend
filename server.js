@@ -1,6 +1,5 @@
 const express = require("express");
 const mysql = require("mysql2");
-const OpenAI = require("openai");
 const cors = require("cors");
 const { v4: uuid } = require("uuid");
 
@@ -74,17 +73,17 @@ db.connect((err) => {
 // OPENAI CLIENT
 // -----------------------------------------------------
 
-const client = {
-    chat: {
-        completions: {
-            create: async () => {
-                throw new Error("OpenAI disabled - using fallback");
-            }
-        }
-    }
-};
+// const client = {
+//     chat: {
+//         completions: {
+//             create: async () => {
+//                 throw new Error("OpenAI disabled - using fallback");
+//             }
+//         }
+//     }
+// };
 
-console.log("⚠️ OpenAI is disabled - using simple AI responses");
+// console.log("⚠️ OpenAI is disabled - using simple AI responses");
 
 // -----------------------------------------------------
 // LIVE CHAT IN-MEMORY STORE
@@ -805,33 +804,33 @@ ${conv.user_satisfaction ? `User Feedback: ${conv.user_satisfaction}` : ''}
     return buildSystemPromptForN8N(promptData, context);
 }
 
-// Helper: Build OpenAI messages
-function buildOpenAIMessages(systemPrompt, userMessage, history, context) {
-    const messages = [
-        { role: "system", content: systemPrompt }
-    ];
+    // Helper: Build OpenAI messages
+    // function buildOpenAIMessages(systemPrompt, userMessage, history, context) {
+    //     const messages = [
+    //         { role: "system", content: systemPrompt }
+    //     ];
 
     // Add context as user message
-    if (Object.keys(context).length > 0) {
-        messages.push({
-            role: "user",
-            content: `Additional context: ${JSON.stringify(context, null, 2)}`
-        });
-    }
+    // if (Object.keys(context).length > 0) {
+    //     messages.push({
+    //         role: "user",
+    //         content: `Additional context: ${JSON.stringify(context, null, 2)}`
+    //     });
+    // }
 
     // Add history
-    history.forEach(msg => {
-        messages.push({
-            role: msg.role === 'user' ? 'user' : 'assistant',
-            content: msg.content
-        });
-    });
+    // history.forEach(msg => {
+    //     messages.push({
+    //         role: msg.role === 'user' ? 'user' : 'assistant',
+    //         content: msg.content
+    //     });
+    // });
 
     // Add current message
-    messages.push({ role: "user", content: userMessage });
-
-    return messages;
-}
+    //     messages.push({ role: "user", content: userMessage });
+    
+    //     return messages;
+    // }
 
 app.get("/n8n/test", (req, res) => {
     res.json({
@@ -2892,6 +2891,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
