@@ -53,20 +53,19 @@ app.use(express.json());
 // -----------------------------------------------------
 // MYSQL CONNECTION
 // -----------------------------------------------------
-const db = mysql.createConnection({
+const db = mysql.createPool({
     host: "demo-ovhv1.ihubtechnologies.com.au",
     user: "root",
     password: "hb]D228Jf#Fy",
     database: "ihub_database",
-    port: 3306
-});
+    port: 3306,
 
-db.connect((err) => {
-    if (err) {
-        console.error("MySQL Connection Error:", err);
-        return;
-    }
-    console.log("✅ MySQL Connected Successfully!");
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0
 });
 
 // -----------------------------------------------------
@@ -1746,14 +1745,14 @@ async function saveConversation(conversation_id, role, content) {
 
 
 // Helper function untuk query
-function dbQuery(sql, params) {
+function dbQuery(sql, params = []) {
     return new Promise((resolve, reject) => {
         db.query(sql, params, (error, results) => {
             if (error) {
-                reject(error);
-            } else {
-                resolve(results);
+                console.error("DB QUERY ERROR:", error.code, error.message);
+                return reject(error);
             }
+            resolve(results);
         });
     });
 }
@@ -1761,48 +1760,59 @@ function dbQuery(sql, params) {
 // -----------------------------------------------------
 // CHAT GREETING API (From Database)
 // -----------------------------------------------------
-app.get("/api/chat/greeting", (req, res) => {
+app.get("/api/chat/greeting", async (req, res) => {
     const query = `
-        SELECT message_text 
-        FROM chatbot_welcome_messages 
-        WHERE is_active = 1 
-        ORDER BY id DESC 
+        SELECT message_text
+        FROM chatbot_welcome_messages
+        WHERE is_active = 1
+        ORDER BY id DESC
         LIMIT 1
     `;
 
-    db.query(query, (error, results) => {
-        if (error) {
-            console.error("Database error:", error);
+    try {
+        const results = await dbQuery(query);
 
-            return res.status(500).json({
-                success: false,
-                error: "Cannot connect to database",
-                data: getDefaultGreeting()
-            });
-        }
-
-        if (results.length === 0) {
+        if (!results || results.length === 0) {
             return res.json({
                 success: true,
                 data: getDefaultGreeting()
             });
         }
 
-        const text = results[0].message_text;
-
         return res.json({
             success: true,
             data: {
-                message: text
+                message: results[0].message_text
             }
         });
-    });
+
+    } catch (error) {
+        console.error("Database error:", error.code);
+
+        return res.status(500).json({
+            success: false,
+            error: "Database unavailable",
+            data: getDefaultGreeting()
+        });
+    }
 });
 
 function getDefaultGreeting() {
     return {
         message: "👋 Cannot connect to database. Using default greeting..."
     };
+}
+
+async function safeQuery(sql, params = []) {
+    try {
+        return await dbQuery(sql, params);
+    } catch (err) {
+        if (err.code === 'ECONNRESET' || err.code === 'PROTOCOL_CONNECTION_LOST') {
+            console.warn("DB reconnect retry...");
+            return await dbQuery(sql, params);
+        }
+        throw err;
+    }
 }
 
 // -----------------------------------------------------
@@ -2891,6 +2901,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
