@@ -1208,83 +1208,6 @@ function sendFallbackResponse(requestedAgentType, context, res, reason) {
   });
 }
 
-// 🔧 Updated buildSystemPromptForN8N function (make sure it uses the agentType parameter)
-function buildSystemPromptForN8N(promptData, context, agentType) {
-  // 🔒 CRITICAL: Use the passed agentType parameter, NOT promptData.agent_type
-  const finalAgentType = agentType || promptData.agent_type || "general";
-  
-  console.log(`🔍 Building prompt for agent_type: "${finalAgentType}"`);
-  console.log(`🔍 promptData.agent_type: "${promptData.agent_type}"`);
-  console.log(`🔍 parameter agentType: "${agentType}"`);
-
-  const roleRules = {
-    sales: `
-- You MAY discuss pricing, plans, and subscriptions
-- You MAY guide users toward purchase decisions
-- Focus on product features and benefits
-- Provide clear pricing information when asked`,
-    
-    support: `
-- Focus on troubleshooting and issue resolution
-- DO NOT discuss pricing or sales topics
-- Provide technical assistance and solutions
-- Escalate billing issues to sales team`,
-    
-    automation: `
-- Explain workflows, integrations, and automations
-- Focus on technical implementation steps
-- DO NOT discuss pricing or sales topics
-- Provide guidance on setup and configuration`,
-    
-    general: `
-- Provide high-level product information
-- DO NOT discuss pricing or technical details
-- Route specific inquiries to appropriate teams
-- Maintain general assistance role`
-  };
-
-  const userInfo = context.user_name ? `User: ${context.user_name}` : "";
-  const productInfo = context.product ? `Product: ${context.product}` : "";
-  
-  // 🔥 FORCE correct role rules based on finalAgentType
-  const prompt = `
-# IDENTITY
-${promptData.identity || `You are a ${finalAgentType} AI assistant for iHub products.`}
-
-# RESPONSIBILITIES
-${promptData.role_description || `Assist users with ${finalAgentType} related inquiries.`}
-
-# KNOWLEDGE BASE
-${promptData.context_knowledge || "General information about iHub products and services."}
-
-# CONTEXT
-${userInfo}
-${productInfo}
-${context.chat_history_length ? `Chat History Length: ${context.chat_history_length}` : ""}
-
-# ROLE-SPECIFIC RULES
-${roleRules[finalAgentType] || roleRules.general}
-
-# COMMUNICATION STYLE
-Language: ${promptData.language || "australian_english"}
-Tone: ${promptData.tone || "professional"}
-
-# HARD CONSTRAINTS
-1. You MUST act strictly as a ${finalAgentType} agent
-2. You are NOT allowed to switch roles
-3. If a request is outside your role, politely redirect
-4. Always maintain professional and helpful tone
-
-# FINAL INSTRUCTION
-Answer the user's question clearly, accurately, and according to your role constraints.
-`.trim();
-
-  console.log(`🔍 Built prompt length: ${prompt.length} chars`);
-  console.log(`🔍 Prompt starts with: ${prompt.substring(0, 100)}...`);
-  
-  return prompt;
-}
-
 app.get("/ai/prompts", (req, res) => {
     const query = `
         SELECT id, agent_type, version, identity, status, is_active
@@ -1423,6 +1346,13 @@ app.get("/ai/dashboard", (req, res) => {
 // Bangun system prompt untuk N8N/Ollama
 // FUNGSI YANG BENAR (tunggal):
 function buildSystemPromptForN8N(promptData, context, agentType) {
+  // Ensure agentType is always set
+  const finalAgentType = agentType || promptData.agent_type || "general";
+  
+  console.log(`🔍 Building prompt for agent_type: "${finalAgentType}"`);
+  console.log(`🔍 promptData.agent_type: "${promptData.agent_type}"`);
+  console.log(`🔍 parameter agentType: "${agentType}"`);
+
   const roleRules = {
     sales: `
 - You MAY discuss pricing, plans, and subscriptions
@@ -1452,12 +1382,12 @@ function buildSystemPromptForN8N(promptData, context, agentType) {
   const userInfo = context.user_name ? `User: ${context.user_name}` : "";
   const productInfo = context.product ? `Product: ${context.product}` : "";
   
-  return `
+  const prompt = `
 # IDENTITY
-${promptData.identity || `You are a ${agentType} AI assistant for iHub products.`}
+${promptData.identity || `You are a ${finalAgentType} AI assistant for iHub products.`}
 
 # RESPONSIBILITIES
-${promptData.role_description || `Assist users with ${agentType} related inquiries.`}
+${promptData.role_description || `Assist users with ${finalAgentType} related inquiries.`}
 
 # KNOWLEDGE BASE
 ${promptData.context_knowledge || "General information about iHub products and services."}
@@ -1468,14 +1398,14 @@ ${productInfo}
 ${context.chat_history_length ? `Chat History Length: ${context.chat_history_length}` : ""}
 
 # ROLE-SPECIFIC RULES
-${roleRules[agentType] || roleRules.general}
+${roleRules[finalAgentType] || roleRules.general}
 
 # COMMUNICATION STYLE
 Language: ${promptData.language || "australian_english"}
 Tone: ${promptData.tone || "professional"}
 
 # HARD CONSTRAINTS
-1. You MUST act strictly as a ${agentType} agent
+1. You MUST act strictly as a ${finalAgentType} agent
 2. You are NOT allowed to switch roles
 3. If a request is outside your role, politely redirect
 4. Always maintain professional and helpful tone
@@ -1483,6 +1413,11 @@ Tone: ${promptData.tone || "professional"}
 # FINAL INSTRUCTION
 Answer the user's question clearly, accurately, and according to your role constraints.
 `.trim();
+
+  console.log(`🔍 Built prompt length: ${prompt.length} chars`);
+  console.log(`🔍 Prompt starts with: ${prompt.substring(0, 100)}...`);
+  
+  return prompt;
 }
 
 // Endpoint untuk N8N mengirim chat dengan database prompt
@@ -3128,6 +3063,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
