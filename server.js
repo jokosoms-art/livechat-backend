@@ -48,29 +48,6 @@ app.options('/n8n/get-prompt', (req, res) => {
     res.status(200).end();
 });
 
-// Add this BEFORE app.use(express.json())
-app.use((req, res, next) => {
-  if (req.originalUrl === '/n8n/get-prompt') {
-    let rawBody = '';
-    req.on('data', chunk => rawBody += chunk);
-    req.on('end', () => {
-      try {
-        req.rawBody = rawBody;
-        if (rawBody.trim()) {
-          req.body = JSON.parse(rawBody);
-        }
-      } catch (e) {
-        // If not JSON, try form data
-        const parsed = new URLSearchParams(rawBody);
-        req.body = Object.fromEntries(parsed);
-      }
-      next();
-    });
-  } else {
-    next();
-  }
-});
-
 app.use(express.json());
 
 // -----------------------------------------------------
@@ -283,14 +260,23 @@ app.post("/ai/chat", async (req, res) => {
         } = req.body;
 
         // ===============================
-        // AGENT TYPE VALIDATION
+        // 🔒 AGENT TYPE — SINGLE SOURCE OF TRUTH
         // ===============================
-        let finalAgentType = agent_type || context?.agent_type || "general";
-        const validAgentTypes = ["general", "sales", "automation", "support"];
-        if (!validAgentTypes.includes(finalAgentType)) {
-            console.warn("⚠️ Invalid agent_type, defaulting to general");
-            finalAgentType = "general";
+        const VALID_AGENT_TYPES = ["general", "sales", "automation", "support"];
+        
+        // ONLY read from req.body.agent_type
+        let finalAgentType = "general";
+        
+        if (
+            typeof agent_type === "string" &&
+            VALID_AGENT_TYPES.includes(agent_type)
+        ) {
+            finalAgentType = agent_type;
+        } else {
+            console.warn("⚠️ Invalid or missing agent_type, defaulting to general");
         }
+        
+        console.log("🔒 LOCKED agent_type:", finalAgentType);
 
         // ===============================
         // DYNAMIC SYSTEM TYPE DETECTION
@@ -904,9 +890,9 @@ app.post("/ai/chat", async (req, res) => {
         const emergencyResponse = {
             success: true,
             reply: `I understand you're asking about "${req.body.message || 'pricing'}". ` +
-                   `Our ${req.body.context?.product || 'WasteVantage'} pricing starts from $99/month. ` +
+                   `Our ${req.body.context?.product || 'WasteVantage'} pricing starts from $299/month. ` +
                    `Would you like me to provide more details or connect you with our sales team?`,
-            agent_type: req.body.agent_type || "general",
+            agent_type: finalAgentType,
             confidence: 0.5,
             response_time_ms: responseTimeMs,
             source: "emergency_fallback",
@@ -3320,6 +3306,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
