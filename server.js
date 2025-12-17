@@ -956,7 +956,31 @@ app.post("/ai/chat", async (req, res) => {
     }
 });
 
-
+app.post("/test-ai-fallback", async (req, res) => {
+    const testPayload = {
+        agent_type: "sales",
+        message: "what are your pricing plans?",
+        context: {
+            product: "wastevantage",
+            user_name: "Test User"
+        },
+        conversation_id: "test_" + Date.now()
+    };
+    
+    console.log("🧪 Testing AI endpoint with fallback...");
+    
+    // Simulate the endpoint logic
+    const response = {
+        success: true,
+        reply: `Test response: Our WasteVantage pricing starts from $99/month.`,
+        agent_type: "sales",
+        confidence: 0.85,
+        source: "test_fallback",
+        timestamp: new Date().toISOString()
+    };
+    
+    res.json(response);
+});
 // Helper: Build enhanced prompt
 function buildEnhancedPrompt(promptData, similarConversations, context) {
     // Ambil agent_type dari promptData atau default ke "general"
@@ -3313,6 +3337,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
