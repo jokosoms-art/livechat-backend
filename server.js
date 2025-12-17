@@ -991,34 +991,51 @@ app.post("/n8n/get-prompt", async (req, res) => {
     const context = req.body.context || {};
     const message = req.body.message || "";
     
-    // DEBUG: Log raw input
-    console.log("🔍 DEBUG - Raw agent_type:", rawAgentType);
-    console.log("🔍 DEBUG - Type of agent_type:", typeof rawAgentType);
+    // 🔍 CRITICAL DEBUG: Log all input details
+    console.log("🔍 ========== DEBUG START ==========");
+    console.log("🔍 Raw agent_type from request:", rawAgentType);
+    console.log("🔍 Type of agent_type:", typeof rawAgentType);
+    console.log("🔍 Context:", JSON.stringify(context, null, 2));
+    console.log("🔍 Message:", message);
     
-    // CRITICAL FIX: Ensure we use the request agent_type
-    let agentTypeForQuery = rawAgentType || "general";
+    // 🔒 FIX: Proper agent_type determination
+    let agentTypeForQuery = "general"; // Default fallback
     
-    // Validate but don't change
-    if (typeof agentTypeForQuery === "string") {
-      agentTypeForQuery = agentTypeForQuery.toLowerCase().trim();
-      const allowedTypes = ["sales", "support", "automation", "general"];
-      
-      if (!allowedTypes.includes(agentTypeForQuery)) {
-        console.log("⚠️ Agent_type not in allowed list, defaulting to general:", agentTypeForQuery);
-        agentTypeForQuery = "general";
+    if (rawAgentType) {
+      if (typeof rawAgentType === "string") {
+        const cleanAgentType = rawAgentType.toLowerCase().trim();
+        const allowedTypes = ["sales", "support", "automation", "general"];
+        
+        console.log("🔍 Cleaned agent_type:", cleanAgentType);
+        console.log("🔍 Is in allowed list?", allowedTypes.includes(cleanAgentType));
+        
+        if (allowedTypes.includes(cleanAgentType)) {
+          agentTypeForQuery = cleanAgentType;
+          console.log("✅ Using valid agent_type:", agentTypeForQuery);
+        } else {
+          console.log("⚠️ Invalid agent_type in list, defaulting to general");
+        }
+      } else {
+        console.log("⚠️ Agent_type is not a string, defaulting to general");
       }
+    } else {
+      console.log("⚠️ No agent_type provided, defaulting to general");
     }
     
-    console.log(`📡 Query Database with: "${agentTypeForQuery}"`);
-    console.log(`📤 Response will use: "${rawAgentType || agentTypeForQuery}"`);
+    console.log("🔍 Final agent_type for query:", agentTypeForQuery);
+    console.log("🔍 ========== DEBUG END ==========");
 
     const query = `
       SELECT * FROM chatbot_prompts
       WHERE agent_type = ?
       AND is_active = 1
-      ORDER BY status = 'active' DESC, version DESC
+      AND status = 'active'
+      ORDER BY version DESC
       LIMIT 1
     `;
+
+    console.log(`📡 Query Database with: "${agentTypeForQuery}"`);
+    console.log("🔍 SQL Query:", query);
 
     db.query(query, [agentTypeForQuery], (error, results) => {
       if (error) {
@@ -1030,68 +1047,28 @@ app.post("/n8n/get-prompt", async (req, res) => {
         });
       }
 
-      // DEBUG: Log database results
-      console.log(`🔍 DEBUG - Database results: ${results.length} rows`);
+      // 🔍 DEBUG: Query results
+      console.log(`🔍 Database results: ${results.length} rows`);
       if (results.length > 0) {
-        console.log(`🔍 DEBUG - Found record with agent_type: "${results[0].agent_type}"`);
-      }
-      
-      // CRITICAL: Use ORIGINAL request value, NOT database value
-      const responseAgentType = rawAgentType || agentTypeForQuery;
-      console.log(`🔍 DEBUG - Response agent_type: "${responseAgentType}"`);
-      
-      if (results.length === 0) {
-        console.log(`❌ No prompt found for "${agentTypeForQuery}", using fallback`);
+        console.log(`🔍 Found record with agent_type: "${results[0].agent_type}"`);
+        console.log(`🔍 Record identity: "${results[0].identity}"`);
+        console.log(`🔍 Record version: "${results[0].version}"`);
+        console.log(`🔍 Record status: "${results[0].status}"`);
+        console.log(`🔍 Record is_active: ${results[0].is_active}`);
+      } else {
+        console.log(`❌ No active prompt found for "${agentTypeForQuery}"`);
         
-        return res.json({
-          success: true,
-          prompt: {
-            system_prompt: `You are a ${responseAgentType} AI assistant for iHub products.`,
-            identity: `${responseAgentType.charAt(0).toUpperCase() + responseAgentType.slice(1)} Assistant`,
-            agent_type: responseAgentType, // USE REQUEST TYPE
-            language: "australian_english",
-            tone: "professional",
-            version: "fallback_1.0",
-            context_knowledge: "",
-            role_description: `Assist with ${responseAgentType} related inquiries`
-          },
-          is_fallback: true,
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      const prompt = results[0];
-      console.log(`✅ Found prompt for "${agentTypeForQuery}":`, prompt.identity);
-      
-      // DEBUG: Compare database vs request agent_type
-      console.log(`🔍 DEBUG - DB agent_type: "${prompt.agent_type}", Request: "${rawAgentType}"`);
-      
-      // Build system prompt
-      const systemPrompt = buildSystemPromptForN8N(prompt, context, responseAgentType);
-
-      // CRITICAL: Return REQUEST agent_type, not DB agent_type
-      res.json({
-        success: true,
-        prompt: {
-          system_prompt: systemPrompt,
-          identity: prompt.identity,
-          agent_type: responseAgentType, // 🔥 USE REQUEST, NOT DB
-          language: prompt.language || "australian_english",
-          tone: prompt.tone || "professional",
-          version: prompt.version || "v1.0",
-          context_knowledge: prompt.context_knowledge || "",
-          role_description: prompt.role_description || "",
-          status: prompt.status || "active"
-        },
-        is_fallback: false,
-        timestamp: new Date().toISOString(),
-        debug: {
-          requested_agent_type: rawAgentType,
-          query_agent_type: agentTypeForQuery,
-          db_agent_type: prompt.agent_type,
-          response_agent_type: responseAgentType
+        // Try fallback to general if specific type not found
+        if (agentTypeForQuery !== "general") {
+          console.log(`🔄 Trying fallback to general...`);
+          db.query(query, ["general"], (fallbackError, fallbackResults) => {
+            handleFallbackQuery(fallbackError, fallbackResults, rawAgentType, agentTypeForQuery, context, res);
+          });
+          return;
         }
-      });
+      }
+      
+      handleQueryResults(error, results, rawAgentType, agentTypeForQuery, context, res);
     });
 
   } catch (error) {
@@ -1104,7 +1081,209 @@ app.post("/n8n/get-prompt", async (req, res) => {
   }
 });
 
+// 🔧 Helper function to handle query results
+function handleQueryResults(error, results, rawAgentType, queryAgentType, context, res) {
+  if (error) {
+    console.error("❌ Query error:", error);
+    return sendFallbackResponse(rawAgentType, context, res, "query_error");
+  }
 
+  if (results.length === 0) {
+    console.log(`❌ No prompt found for "${queryAgentType}", using fallback`);
+    return sendFallbackResponse(rawAgentType, context, res, "no_results");
+  }
+
+  const prompt = results[0];
+  console.log(`✅ Found prompt for "${queryAgentType}": ${prompt.identity}`);
+  
+  // 🔒 CRITICAL: Use REQUESTED agent_type, not database agent_type
+  const responseAgentType = rawAgentType || queryAgentType || "general";
+  console.log(`🔍 Response agent_type: "${responseAgentType}"`);
+  
+  // Build system prompt - FORCE correct agent_type
+  const systemPrompt = buildSystemPromptForN8N(prompt, context, responseAgentType);
+
+  res.json({
+    success: true,
+    prompt: {
+      system_prompt: systemPrompt,
+      identity: prompt.identity,
+      agent_type: responseAgentType, // 🔥 USE REQUESTED TYPE
+      language: prompt.language || "australian_english",
+      tone: prompt.tone || "professional",
+      version: prompt.version || "v1.0",
+      context_knowledge: prompt.context_knowledge || "",
+      role_description: prompt.role_description || "",
+      status: prompt.status || "active"
+    },
+    is_fallback: false,
+    timestamp: new Date().toISOString(),
+    debug: {
+      requested_agent_type: rawAgentType,
+      query_agent_type: queryAgentType,
+      db_agent_type: prompt.agent_type,
+      response_agent_type: responseAgentType,
+      note: "Using requested agent_type for response"
+    }
+  });
+}
+
+// 🔧 Helper function for fallback queries
+function handleFallbackQuery(error, results, rawAgentType, originalQueryAgentType, context, res) {
+  if (error) {
+    console.error("❌ Fallback query error:", error);
+    return sendFallbackResponse(rawAgentType, context, res, "fallback_error");
+  }
+
+  if (results.length === 0) {
+    console.log("❌ No general prompt found either, using basic fallback");
+    return sendFallbackResponse(rawAgentType, context, res, "no_general_fallback");
+  }
+
+  const prompt = results[0];
+  console.log(`🔄 Using general fallback prompt`);
+  
+  // Still use requested agent_type even with fallback prompt
+  const responseAgentType = rawAgentType || "general";
+  const systemPrompt = buildSystemPromptForN8N(prompt, context, responseAgentType);
+
+  res.json({
+    success: true,
+    prompt: {
+      system_prompt: systemPrompt,
+      identity: prompt.identity,
+      agent_type: responseAgentType, // 🔥 STILL USE REQUESTED TYPE
+      language: prompt.language || "australian_english",
+      tone: prompt.tone || "professional",
+      version: prompt.version || "v1.0",
+      context_knowledge: prompt.context_knowledge || "",
+      role_description: prompt.role_description || ""
+    },
+    is_fallback: true,
+    timestamp: new Date().toISOString(),
+    debug: {
+      requested_agent_type: rawAgentType,
+      original_query_agent_type: originalQueryAgentType,
+      fallback_agent_type: "general",
+      response_agent_type: responseAgentType,
+      note: "Used general prompt as fallback"
+    }
+  });
+}
+
+// 🔧 Helper function for fallback responses
+function sendFallbackResponse(requestedAgentType, context, res, reason) {
+  console.log(`🔄 Sending fallback response due to: ${reason}`);
+  
+  const responseAgentType = requestedAgentType || "general";
+  const fallbackPrompt = {
+    identity: `${responseAgentType.charAt(0).toUpperCase() + responseAgentType.slice(1)} Assistant`,
+    context_knowledge: "General information about iHub products and services.",
+    role_description: `Assist with ${responseAgentType} related inquiries.`,
+    language: "australian_english",
+    tone: "professional"
+  };
+  
+  const systemPrompt = buildSystemPromptForN8N(fallbackPrompt, context, responseAgentType);
+
+  res.json({
+    success: true,
+    prompt: {
+      system_prompt: systemPrompt,
+      identity: fallbackPrompt.identity,
+      agent_type: responseAgentType, // 🔥 USE REQUESTED TYPE
+      language: fallbackPrompt.language,
+      tone: fallbackPrompt.tone,
+      version: "fallback_1.0",
+      context_knowledge: fallbackPrompt.context_knowledge,
+      role_description: fallbackPrompt.role_description
+    },
+    is_fallback: true,
+    timestamp: new Date().toISOString(),
+    debug: {
+      requested_agent_type: requestedAgentType,
+      response_agent_type: responseAgentType,
+      fallback_reason: reason
+    }
+  });
+}
+
+// 🔧 Updated buildSystemPromptForN8N function (make sure it uses the agentType parameter)
+function buildSystemPromptForN8N(promptData, context, agentType) {
+  // 🔒 CRITICAL: Use the passed agentType parameter, NOT promptData.agent_type
+  const finalAgentType = agentType || promptData.agent_type || "general";
+  
+  console.log(`🔍 Building prompt for agent_type: "${finalAgentType}"`);
+  console.log(`🔍 promptData.agent_type: "${promptData.agent_type}"`);
+  console.log(`🔍 parameter agentType: "${agentType}"`);
+
+  const roleRules = {
+    sales: `
+- You MAY discuss pricing, plans, and subscriptions
+- You MAY guide users toward purchase decisions
+- Focus on product features and benefits
+- Provide clear pricing information when asked`,
+    
+    support: `
+- Focus on troubleshooting and issue resolution
+- DO NOT discuss pricing or sales topics
+- Provide technical assistance and solutions
+- Escalate billing issues to sales team`,
+    
+    automation: `
+- Explain workflows, integrations, and automations
+- Focus on technical implementation steps
+- DO NOT discuss pricing or sales topics
+- Provide guidance on setup and configuration`,
+    
+    general: `
+- Provide high-level product information
+- DO NOT discuss pricing or technical details
+- Route specific inquiries to appropriate teams
+- Maintain general assistance role`
+  };
+
+  const userInfo = context.user_name ? `User: ${context.user_name}` : "";
+  const productInfo = context.product ? `Product: ${context.product}` : "";
+  
+  // 🔥 FORCE correct role rules based on finalAgentType
+  const prompt = `
+# IDENTITY
+${promptData.identity || `You are a ${finalAgentType} AI assistant for iHub products.`}
+
+# RESPONSIBILITIES
+${promptData.role_description || `Assist users with ${finalAgentType} related inquiries.`}
+
+# KNOWLEDGE BASE
+${promptData.context_knowledge || "General information about iHub products and services."}
+
+# CONTEXT
+${userInfo}
+${productInfo}
+${context.chat_history_length ? `Chat History Length: ${context.chat_history_length}` : ""}
+
+# ROLE-SPECIFIC RULES
+${roleRules[finalAgentType] || roleRules.general}
+
+# COMMUNICATION STYLE
+Language: ${promptData.language || "australian_english"}
+Tone: ${promptData.tone || "professional"}
+
+# HARD CONSTRAINTS
+1. You MUST act strictly as a ${finalAgentType} agent
+2. You are NOT allowed to switch roles
+3. If a request is outside your role, politely redirect
+4. Always maintain professional and helpful tone
+
+# FINAL INSTRUCTION
+Answer the user's question clearly, accurately, and according to your role constraints.
+`.trim();
+
+  console.log(`🔍 Built prompt length: ${prompt.length} chars`);
+  console.log(`🔍 Prompt starts with: ${prompt.substring(0, 100)}...`);
+  
+  return prompt;
+}
 
 app.get("/ai/prompts", (req, res) => {
     const query = `
@@ -2949,6 +3128,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
