@@ -675,26 +675,9 @@ app.post("/ai/chat", async (req, res) => {
             const fallbackResponses = {
                 sales: {
                     pricing: `Our ${systemTypeName || 'WasteVantage'} pricing plans:\n\n` +
-                            `💰 **Basic Plan**: $99/month\n` +
-                            `• Core waste management features\n` +
-                            `• Up to 100 transactions/month\n` +
-                            `• Email support\n` +
-                            `• Basic reporting\n\n` +
-                            
-                            `🚀 **Professional Plan**: $199/month\n` +
-                            `• All Basic features\n` +
-                            `• Up to 1000 transactions/month\n` +
-                            `• Priority support\n` +
-                            `• Advanced analytics\n` +
-                            `• API access\n\n` +
-                            
-                            `🏢 **Enterprise Plan**: Custom pricing\n` +
-                            `• Unlimited transactions\n` +
-                            `• Dedicated account manager\n` +
-                            `• Custom integrations\n` +
-                            `• 24/7 phone support\n` +
-                            `• White-label options\n\n` +
-                            
+                            `💰 Start from: $299/month\n` +
+                            `• For small operators\n` +
+                            `• 30 days free trial\n` +                            
                             `Would you like me to arrange a personalized demo or connect you with our sales team for more details?`,
                     
                     features: `The ${systemTypeName || 'WasteVantage'} platform includes:\n\n` +
@@ -3337,6 +3320,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
