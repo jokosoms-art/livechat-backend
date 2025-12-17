@@ -48,6 +48,29 @@ app.options('/n8n/get-prompt', (req, res) => {
     res.status(200).end();
 });
 
+// Add this BEFORE app.use(express.json())
+app.use((req, res, next) => {
+  if (req.originalUrl === '/n8n/get-prompt') {
+    let rawBody = '';
+    req.on('data', chunk => rawBody += chunk);
+    req.on('end', () => {
+      try {
+        req.rawBody = rawBody;
+        if (rawBody.trim()) {
+          req.body = JSON.parse(rawBody);
+        }
+      } catch (e) {
+        // If not JSON, try form data
+        const parsed = new URLSearchParams(rawBody);
+        req.body = Object.fromEntries(parsed);
+      }
+      next();
+    });
+  } else {
+    next();
+  }
+});
+
 app.use(express.json());
 
 // -----------------------------------------------------
@@ -983,102 +1006,145 @@ app.get("/ai/analytics/:agent_type", (req, res) => {
 });
 
 app.post("/n8n/get-prompt", async (req, res) => {
-  console.log("🔧 N8N Request: Get prompt for agent_type:", req.body.agent_type);
-  console.log("📦 Full request body:", JSON.stringify(req.body, null, 2));
-
-  try {
-    const rawAgentType = req.body.agent_type;
-    const context = req.body.context || {};
-    const message = req.body.message || "";
+  console.log("🔧 N8N Request: Get prompt");
+  
+  // Debug raw body
+  let rawBody = '';
+  req.on('data', chunk => {
+    rawBody += chunk.toString();
+  });
+  
+  req.on('end', async () => {
+    console.log("📦 Raw request body length:", rawBody.length);
+    console.log("📦 Raw request body content:", rawBody);
     
-    // 🔍 CRITICAL DEBUG: Log all input details
-    console.log("🔍 ========== DEBUG START ==========");
-    console.log("🔍 Raw agent_type from request:", rawAgentType);
-    console.log("🔍 Type of agent_type:", typeof rawAgentType);
-    console.log("🔍 Context:", JSON.stringify(context, null, 2));
-    console.log("🔍 Message:", message);
-    
-    // 🔒 FIX: Proper agent_type determination
-    let agentTypeForQuery = "general"; // Default fallback
-    
-    if (rawAgentType) {
-      if (typeof rawAgentType === "string") {
-        const cleanAgentType = rawAgentType.toLowerCase().trim();
-        const allowedTypes = ["sales", "support", "automation", "general"];
-        
-        console.log("🔍 Cleaned agent_type:", cleanAgentType);
-        console.log("🔍 Is in allowed list?", allowedTypes.includes(cleanAgentType));
-        
-        if (allowedTypes.includes(cleanAgentType)) {
-          agentTypeForQuery = cleanAgentType;
-          console.log("✅ Using valid agent_type:", agentTypeForQuery);
-        } else {
-          console.log("⚠️ Invalid agent_type in list, defaulting to general");
+    try {
+      let body = {};
+      
+      // Try to parse JSON
+      if (rawBody.trim()) {
+        try {
+          body = JSON.parse(rawBody);
+          console.log("✅ Successfully parsed JSON body");
+        } catch (parseError) {
+          console.log("⚠️ Could not parse as JSON, trying form data...");
+          // Try to parse as form data
+          try {
+            const parsed = new URLSearchParams(rawBody);
+            body = Object.fromEntries(parsed);
+            console.log("📋 Parsed as form data");
+            
+            // Try to parse context JSON if it's a string
+            if (body.context && typeof body.context === 'string') {
+              try {
+                body.context = JSON.parse(body.context);
+              } catch (e) {
+                console.log("⚠️ Could not parse context as JSON");
+              }
+            }
+          } catch (formError) {
+            console.log("❌ Could not parse as form data either:", formError.message);
+          }
         }
       } else {
-        console.log("⚠️ Agent_type is not a string, defaulting to general");
-      }
-    } else {
-      console.log("⚠️ No agent_type provided, defaulting to general");
-    }
-    
-    console.log("🔍 Final agent_type for query:", agentTypeForQuery);
-    console.log("🔍 ========== DEBUG END ==========");
-
-    const query = `
-      SELECT * FROM chatbot_prompts
-      WHERE agent_type = ?
-      AND is_active = 1
-      AND status = 'active'
-      ORDER BY version DESC
-      LIMIT 1
-    `;
-
-    console.log(`📡 Query Database with: "${agentTypeForQuery}"`);
-    console.log("🔍 SQL Query:", query);
-
-    db.query(query, [agentTypeForQuery], (error, results) => {
-      if (error) {
-        console.error("❌ Database error:", error);
-        return res.json({
-          success: false,
-          error: "Database query failed",
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      // 🔍 DEBUG: Query results
-      console.log(`🔍 Database results: ${results.length} rows`);
-      if (results.length > 0) {
-        console.log(`🔍 Found record with agent_type: "${results[0].agent_type}"`);
-        console.log(`🔍 Record identity: "${results[0].identity}"`);
-        console.log(`🔍 Record version: "${results[0].version}"`);
-        console.log(`🔍 Record status: "${results[0].status}"`);
-        console.log(`🔍 Record is_active: ${results[0].is_active}`);
-      } else {
-        console.log(`❌ No active prompt found for "${agentTypeForQuery}"`);
-        
-        // Try fallback to general if specific type not found
-        if (agentTypeForQuery !== "general") {
-          console.log(`🔄 Trying fallback to general...`);
-          db.query(query, ["general"], (fallbackError, fallbackResults) => {
-            handleFallbackQuery(fallbackError, fallbackResults, rawAgentType, agentTypeForQuery, context, res);
-          });
-          return;
-        }
+        console.log("⚠️ Empty raw body received");
       }
       
-      handleQueryResults(error, results, rawAgentType, agentTypeForQuery, context, res);
-    });
+      console.log("🔍 Processed body:", JSON.stringify(body, null, 2));
+      
+      // Now use `body` instead of `req.body`
+      const rawAgentType = body.agent_type;
+      const context = body.context || {};
+      const message = body.message || "";
+      
+      console.log("🔍 ========== DEBUG START ==========");
+      console.log("🔍 Raw agent_type from request:", rawAgentType);
+      console.log("🔍 Type of agent_type:", typeof rawAgentType);
+      console.log("🔍 Context:", JSON.stringify(context, null, 2));
+      console.log("🔍 Message:", message);
+      
+      // 🔒 FIX: Proper agent_type determination
+      let agentTypeForQuery = "general"; // Default fallback
+      
+      if (rawAgentType) {
+        if (typeof rawAgentType === "string") {
+          const cleanAgentType = rawAgentType.toLowerCase().trim();
+          const allowedTypes = ["sales", "support", "automation", "general"];
+          
+          console.log("🔍 Cleaned agent_type:", cleanAgentType);
+          console.log("🔍 Is in allowed list?", allowedTypes.includes(cleanAgentType));
+          
+          if (allowedTypes.includes(cleanAgentType)) {
+            agentTypeForQuery = cleanAgentType;
+            console.log("✅ Using valid agent_type:", agentTypeForQuery);
+          } else {
+            console.log("⚠️ Invalid agent_type in list, defaulting to general");
+          }
+        } else {
+          console.log("⚠️ Agent_type is not a string, defaulting to general");
+        }
+      } else {
+        console.log("⚠️ No agent_type provided, defaulting to general");
+      }
+      
+      console.log("🔍 Final agent_type for query:", agentTypeForQuery);
+      console.log("🔍 ========== DEBUG END ==========");
 
-  } catch (error) {
-    console.error("❌ N8N get-prompt error:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
+      const query = `
+        SELECT * FROM chatbot_prompts
+        WHERE agent_type = ?
+        AND is_active = 1
+        AND status = 'active'
+        ORDER BY version DESC
+        LIMIT 1
+      `;
+
+      console.log(`📡 Query Database with: "${agentTypeForQuery}"`);
+      console.log("🔍 SQL Query:", query);
+
+      db.query(query, [agentTypeForQuery], (error, results) => {
+        if (error) {
+          console.error("❌ Database error:", error);
+          return res.json({
+            success: false,
+            error: "Database query failed",
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        // 🔍 DEBUG: Query results
+        console.log(`🔍 Database results: ${results.length} rows`);
+        if (results.length > 0) {
+          console.log(`🔍 Found record with agent_type: "${results[0].agent_type}"`);
+          console.log(`🔍 Record identity: "${results[0].identity}"`);
+          console.log(`🔍 Record version: "${results[0].version}"`);
+          console.log(`🔍 Record status: "${results[0].status}"`);
+          console.log(`🔍 Record is_active: ${results[0].is_active}`);
+        } else {
+          console.log(`❌ No active prompt found for "${agentTypeForQuery}"`);
+          
+          // Try fallback to general if specific type not found
+          if (agentTypeForQuery !== "general") {
+            console.log(`🔄 Trying fallback to general...`);
+            db.query(query, ["general"], (fallbackError, fallbackResults) => {
+              handleFallbackQuery(fallbackError, fallbackResults, rawAgentType, agentTypeForQuery, context, res);
+            });
+            return;
+          }
+        }
+        
+        handleQueryResults(error, results, rawAgentType, agentTypeForQuery, context, res);
+      });
+
+    } catch (error) {
+      console.error("❌ N8N get-prompt error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
 });
 
 // 🔧 Helper function to handle query results
@@ -3063,6 +3129,7 @@ app.listen(PORT, () => {
     console.log(`✅ All endpoints preserved and functional`);
     console.log("=============================");
 });
+
 
 
 
